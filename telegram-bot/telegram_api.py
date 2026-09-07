@@ -36,8 +36,31 @@ class TelegramApi:
             time.sleep(3)
             return []
 
-    def send_message(self, chat_id: int, text: str, reply_markup: dict[str, Any] | None = None) -> None:
-        self.call("sendMessage", chat_id=chat_id, text=text, reply_markup=reply_markup)
+    def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
+    ) -> int:
+        result = self.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return int(result["result"]["message_id"])
+
+    def delete_message(self, chat_id: int, message_id: int) -> None:
+        try:
+            self.call("deleteMessage", chat_id=chat_id, message_id=message_id)
+        except Exception:
+            # Telegram can reject deletion when the message is already gone or too old.
+            pass
+
+    def set_my_commands(self, commands: list[dict[str, str]]) -> None:
+        self.call("setMyCommands", commands=commands)
 
     def answer_callback(self, callback_query_id: str, text: str = "") -> None:
         self.call("answerCallbackQuery", callback_query_id=callback_query_id, text=text)
