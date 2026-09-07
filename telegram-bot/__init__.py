@@ -1,0 +1,1 @@
+"""Telegram Marketplace Bot package."""

@@ -10,6 +10,11 @@ out-tsc
 
 # dependencies
 node_modules
+telegram_marketplace.sqlite3
+telegram_marketplace.sqlite3-shm
+telegram_marketplace.sqlite3-wal
+__pycache__/
+*.pyc
 
 # IDEs and editors
 /.idea
