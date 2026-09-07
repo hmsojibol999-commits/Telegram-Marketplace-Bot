@@ -8,6 +8,7 @@ from dataclasses import dataclass
 class Settings:
     bot_token: str
     admin_user_id: int
+    support_admin_username: str
     db_path: str
     polling_timeout: int = 30
 
@@ -22,5 +23,6 @@ def load_settings() -> Settings:
     return Settings(
         bot_token=token,
         admin_user_id=int(admin_raw),
+        support_admin_username=os.environ.get("SUPPORT_ADMIN_USERNAME", "Sojib31_4").lstrip("@"),
         db_path=os.environ.get("MARKETPLACE_DB_PATH", "telegram_marketplace.sqlite3"),
     )
