@@ -42,9 +42,15 @@ CREATE TABLE IF NOT EXISTS payment_methods (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -52,6 +58,7 @@ CREATE TABLE IF NOT EXISTS options (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category_id INTEGER NOT NULL REFERENCES categories(id),
     name TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(category_id, name)
 );
@@ -138,6 +145,8 @@ class Database:
     def _migrate_existing_database(self) -> None:
         self._add_column_if_missing("users", "language", "TEXT NOT NULL DEFAULT 'bn'")
         self._add_column_if_missing("withdrawals", "method_key", "TEXT NOT NULL DEFAULT 'bkash'")
+        self._add_column_if_missing("categories", "is_deleted", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column_if_missing("options", "is_deleted", "INTEGER NOT NULL DEFAULT 0")
         self.connection.execute(
             "INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('market_orders', 1000)"
         )
@@ -233,6 +242,38 @@ class Database:
                 ("nagad", "Nagad", "Admin has not configured Nagad details yet."),
                 ("binance", "Binance", "Admin has not configured Binance details yet."),
             ],
+        )
+        self.connection.execute(
+            """
+            INSERT INTO app_settings (setting_key, setting_value)
+            VALUES ('vendor_commission_percent', '99')
+            ON CONFLICT(setting_key) DO NOTHING
+            """
+        )
+        self.connection.commit()
+
+    def get_vendor_commission_percent(self) -> int:
+        row = self.connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key='vendor_commission_percent'"
+        ).fetchone()
+        if row is None:
+            return 99
+        try:
+            value = int(row["setting_value"])
+        except (TypeError, ValueError):
+            return 99
+        return max(0, min(100, value))
+
+    def set_vendor_commission_percent(self, percent: int) -> None:
+        if percent < 0 or percent > 100:
+            raise ValueError("Commission must be between 0 and 100 percent.")
+        self.connection.execute(
+            """
+            INSERT INTO app_settings (setting_key, setting_value)
+            VALUES ('vendor_commission_percent', ?)
+            ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value
+            """,
+            (str(percent),),
         )
         self.connection.commit()
 
@@ -344,22 +385,175 @@ class Database:
             return connection.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
 
     def create_category(self, name: str) -> sqlite3.Row:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Category name cannot be empty.")
         with self.transaction() as connection:
+            deleted = connection.execute(
+                "SELECT * FROM categories WHERE lower(name)=lower(?) AND is_deleted=1",
+                (clean_name,),
+            ).fetchone()
+            if deleted is not None:
+                connection.execute("UPDATE categories SET is_deleted=0 WHERE id=?", (deleted["id"],))
+                return connection.execute("SELECT * FROM categories WHERE id=?", (deleted["id"],)).fetchone()
             try:
-                cursor = connection.execute("INSERT INTO categories (name) VALUES (?)", (name.strip(),))
+                cursor = connection.execute("INSERT INTO categories (name) VALUES (?)", (clean_name,))
             except sqlite3.IntegrityError as error:
                 raise ValueError("That category already exists.") from error
             return connection.execute("SELECT * FROM categories WHERE id=?", (cursor.lastrowid,)).fetchone()
 
     def create_option(self, category_id: int, name: str) -> sqlite3.Row:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Option name cannot be empty.")
         with self.transaction() as connection:
+            category = connection.execute(
+                "SELECT id FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+            ).fetchone()
+            if category is None:
+                raise ValueError("Category not found.")
+            deleted = connection.execute(
+                """
+                SELECT * FROM options
+                WHERE category_id=? AND lower(name)=lower(?) AND is_deleted=1
+                """,
+                (category_id, clean_name),
+            ).fetchone()
+            if deleted is not None:
+                connection.execute("UPDATE options SET is_deleted=0 WHERE id=?", (deleted["id"],))
+                return connection.execute("SELECT * FROM options WHERE id=?", (deleted["id"],)).fetchone()
             try:
                 cursor = connection.execute(
-                    "INSERT INTO options (category_id, name) VALUES (?, ?)", (category_id, name.strip())
+                    "INSERT INTO options (category_id, name) VALUES (?, ?)", (category_id, clean_name)
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError("That option already exists in this category.") from error
             return connection.execute("SELECT * FROM options WHERE id=?", (cursor.lastrowid,)).fetchone()
+
+    def rename_category(self, category_id: int, name: str) -> sqlite3.Row:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Category name cannot be empty.")
+        with self.transaction() as connection:
+            category = connection.execute(
+                "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+            ).fetchone()
+            if category is None:
+                raise ValueError("Category not found.")
+            try:
+                connection.execute("UPDATE categories SET name=? WHERE id=?", (clean_name, category_id))
+            except sqlite3.IntegrityError as error:
+                raise ValueError("That category already exists.") from error
+            return connection.execute("SELECT * FROM categories WHERE id=?", (category_id,)).fetchone()
+
+    def rename_option(self, option_id: int, name: str) -> sqlite3.Row:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Option name cannot be empty.")
+        with self.transaction() as connection:
+            option = connection.execute(
+                """
+                SELECT * FROM options
+                WHERE id=? AND is_deleted=0
+                """,
+                (option_id,),
+            ).fetchone()
+            if option is None:
+                raise ValueError("Option not found.")
+            try:
+                connection.execute("UPDATE options SET name=? WHERE id=?", (clean_name, option_id))
+            except sqlite3.IntegrityError as error:
+                raise ValueError("That option already exists in this category.") from error
+            return connection.execute("SELECT * FROM options WHERE id=?", (option_id,)).fetchone()
+
+    @staticmethod
+    def _delete_available_stock(connection: sqlite3.Connection, option_ids: list[int]) -> None:
+        if not option_ids:
+            return
+        placeholders = ",".join("?" for _ in option_ids)
+        connection.execute(
+            f"""
+            DELETE FROM inventory_items
+            WHERE status='available'
+              AND batch_id IN (
+                SELECT id FROM inventory_batches WHERE option_id IN ({placeholders})
+              )
+            """,
+            option_ids,
+        )
+        connection.execute(
+            f"""
+            DELETE FROM inventory_batches
+            WHERE option_id IN ({placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
+              )
+            """,
+            option_ids,
+        )
+
+    def delete_option(self, option_id: int) -> sqlite3.Row:
+        with self.transaction() as connection:
+            option = connection.execute(
+                "SELECT * FROM options WHERE id=? AND is_deleted=0", (option_id,)
+            ).fetchone()
+            if option is None:
+                raise ValueError("Option not found.")
+            self._delete_available_stock(connection, [option_id])
+            sold = connection.execute(
+                """
+                SELECT 1
+                FROM inventory_items i
+                JOIN inventory_batches b ON b.id=i.batch_id
+                WHERE b.option_id=? AND i.status='sold'
+                LIMIT 1
+                """,
+                (option_id,),
+            ).fetchone()
+            if sold is None:
+                connection.execute("DELETE FROM options WHERE id=?", (option_id,))
+            else:
+                connection.execute("UPDATE options SET is_deleted=1 WHERE id=?", (option_id,))
+            return option
+
+    def delete_category(self, category_id: int) -> sqlite3.Row:
+        with self.transaction() as connection:
+            category = connection.execute(
+                "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+            ).fetchone()
+            if category is None:
+                raise ValueError("Category not found.")
+            options = connection.execute(
+                "SELECT id FROM options WHERE category_id=? AND is_deleted=0", (category_id,)
+            ).fetchall()
+            option_ids = [row["id"] for row in options]
+            self._delete_available_stock(connection, option_ids)
+            sold = connection.execute(
+                f"""
+                SELECT 1
+                FROM inventory_items i
+                JOIN inventory_batches b ON b.id=i.batch_id
+                WHERE b.option_id IN ({",".join("?" for _ in option_ids)})
+                  AND i.status='sold'
+                LIMIT 1
+                """,
+                option_ids,
+            ).fetchone() if option_ids else None
+            if sold is None:
+                if option_ids:
+                    connection.execute(
+                        f"DELETE FROM options WHERE id IN ({','.join('?' for _ in option_ids)})",
+                        option_ids,
+                    )
+                connection.execute("DELETE FROM categories WHERE id=?", (category_id,))
+            else:
+                connection.execute("UPDATE categories SET is_deleted=1 WHERE id=?", (category_id,))
+                if option_ids:
+                    connection.execute(
+                        f"UPDATE options SET is_deleted=1 WHERE id IN ({','.join('?' for _ in option_ids)})",
+                        option_ids,
+                    )
+            return category
 
     def add_inventory_batch(
         self,
@@ -402,13 +596,32 @@ class Database:
             JOIN categories c ON c.id=o.category_id
             LEFT JOIN inventory_batches b ON b.option_id=o.id
             LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE o.id=?
+            WHERE o.id=? AND o.is_deleted=0 AND c.is_deleted=0
             GROUP BY o.id
             """,
             (option_id,),
         ).fetchone()
 
-    def quote_purchase(self, option_id: int, quantity: int, admin_telegram_user_id: int) -> dict[str, int]:
+    def option_price_variants(self, option_id: int) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            """
+            SELECT b.price_cents, COUNT(i.id) available_stock
+            FROM inventory_batches b
+            JOIN inventory_items i ON i.batch_id=b.id AND i.status='available'
+            WHERE b.option_id=?
+            GROUP BY b.price_cents
+            ORDER BY b.price_cents
+            """,
+            (option_id,),
+        ).fetchall()
+
+    def quote_purchase(
+        self,
+        option_id: int,
+        quantity: int,
+        admin_telegram_user_id: int,
+        price_cents: int | None = None,
+    ) -> dict[str, int]:
         if quantity <= 0:
             raise ValueError("Quantity must be positive.")
         rows = self.connection.execute(
@@ -418,11 +631,12 @@ class Database:
             JOIN inventory_batches b ON b.id=i.batch_id
             JOIN users owner ON owner.id=b.owner_user_id
             WHERE b.option_id=? AND i.status='available'
+              AND (? IS NULL OR b.price_cents=?)
             ORDER BY CASE WHEN owner.telegram_user_id=? THEN 0 ELSE 1 END,
               b.created_at, b.id, i.id
             LIMIT ?
             """,
-            (option_id, admin_telegram_user_id, quantity),
+            (option_id, price_cents, price_cents, admin_telegram_user_id, quantity),
         ).fetchall()
         if len(rows) < quantity:
             option = self.option(option_id)
@@ -438,6 +652,8 @@ class Database:
         request_key: str,
         admin_telegram_user_id: int,
         quoted_total_cents: int,
+        price_cents: int | None = None,
+        commission_percent: int | None = None,
     ) -> tuple[sqlite3.Row, list[str]]:
         with self.transaction() as connection:
             duplicate = connection.execute(
@@ -458,6 +674,15 @@ class Database:
             ).fetchone()
             if buyer is None:
                 raise ValueError("Buyer not found.")
+            if commission_percent is None:
+                commission_percent = self.get_vendor_commission_percent()
+            if commission_percent < 0 or commission_percent > 100:
+                raise ValueError("Invalid vendor commission setting.")
+            admin_owner = connection.execute(
+                "SELECT * FROM users WHERE telegram_user_id=?", (admin_telegram_user_id,)
+            ).fetchone()
+            if admin_owner is None:
+                raise ValueError("Admin must start the bot before processing purchases.")
             rows = connection.execute(
                 """
                 SELECT i.id item_id, i.secret_text, b.price_cents, b.owner_user_id
@@ -465,11 +690,12 @@ class Database:
                 JOIN inventory_batches b ON b.id=i.batch_id
                 JOIN users owner ON owner.id=b.owner_user_id
                 WHERE b.option_id=? AND i.status='available'
+                  AND (? IS NULL OR b.price_cents=?)
                 ORDER BY CASE WHEN owner.telegram_user_id=? THEN 0 ELSE 1 END,
                   b.created_at, b.id, i.id
                 LIMIT ?
                 """,
-                (option_id, admin_telegram_user_id, quantity),
+                (option_id, price_cents, price_cents, admin_telegram_user_id, quantity),
             ).fetchall()
             if len(rows) < quantity:
                 raise ValueError("Stock changed. Please review the available stock.")
@@ -515,20 +741,79 @@ class Database:
                 note=f"Option #{option_id} x {quantity}",
             )
             for owner_id, amount in owners.items():
+                vendor_amount = amount
+                fee_amount = 0
+                if owner_id != admin_owner["id"]:
+                    vendor_amount = amount * commission_percent // 100
+                    fee_amount = amount - vendor_amount
                 self.ledger_entry(
                     connection,
                     user_id=owner_id,
-                    amount_cents=amount,
+                    amount_cents=vendor_amount,
                     entry_type="owner_sale",
                     reference_type="market_order",
                     reference_id=order_id,
                     idempotency_key=f"market-purchase-owner:{request_key}:{owner_id}",
-                    note=f"Option #{option_id} x {amount} cents",
+                    note=f"Option #{option_id} x {vendor_amount} cents after {commission_percent}% commission",
                 )
+                if fee_amount:
+                    self.ledger_entry(
+                        connection,
+                        user_id=admin_owner["id"],
+                        amount_cents=fee_amount,
+                        entry_type="platform_fee",
+                        reference_type="market_order",
+                        reference_id=order_id,
+                        idempotency_key=f"market-purchase-fee:{request_key}:{owner_id}",
+                        note=f"Option #{option_id} platform fee",
+                    )
             order = connection.execute(
                 "SELECT * FROM market_orders WHERE id=?", (order_id,)
             ).fetchone()
             return order, [row["secret_text"] for row in rows]
+
+    def market_order_vendor_payouts(
+        self, order_id: int, admin_telegram_user_id: int, commission_percent: int
+    ) -> list[dict[str, int | str | None]]:
+        rows = self.connection.execute(
+            """
+            SELECT u.telegram_user_id, u.username, u.balance_cents,
+              op.name option_name, SUM(oi.price_cents) amount_cents
+            FROM market_order_items oi
+            JOIN users u ON u.id=oi.owner_user_id
+            JOIN market_orders mo ON mo.id=oi.order_id
+            JOIN options op ON op.id=mo.option_id
+            WHERE oi.order_id=? AND u.telegram_user_id<>?
+            GROUP BY u.id, op.id
+            ORDER BY u.id
+            """,
+            (order_id, admin_telegram_user_id),
+        ).fetchall()
+        return [
+            {
+                "telegram_user_id": row["telegram_user_id"],
+                "username": row["username"],
+                "balance_cents": row["balance_cents"],
+                "option_name": row["option_name"],
+                "amount_cents": row["amount_cents"] * commission_percent // 100,
+            }
+            for row in rows
+        ]
+
+    def inventory_batch_context(self, batch_id: int) -> sqlite3.Row:
+        row = self.connection.execute(
+            """
+            SELECT b.item_count, b.price_cents, o.name option_name, c.name category_name
+            FROM inventory_batches b
+            JOIN options o ON o.id=b.option_id
+            JOIN categories c ON c.id=o.category_id
+            WHERE b.id=?
+            """,
+            (batch_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Inventory batch not found.")
+        return row
 
     def create_withdrawal(
         self, telegram_user_id: int, method_key: str, amount_cents: int, payout_details: str

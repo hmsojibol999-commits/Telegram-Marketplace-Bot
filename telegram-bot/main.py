@@ -12,10 +12,13 @@ from telegram_api import TelegramApi
 
 CANCEL = "❌ Cancel"
 FALLBACK = "Invalid input. Please use the correct buttons or commands provided."
+BDT_PER_USDT = 125
 
 
-def money(cents: int) -> str:
-    return f"{cents / 100:.2f}"
+def money(cents: int, language: str = "bn") -> str:
+    if language == "en":
+        return f"{cents / 100 / BDT_PER_USDT:.2f} USDT"
+    return f"{cents / 100:.2f} Tk"
 
 
 def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
@@ -51,6 +54,7 @@ class MarketplaceBot:
         self.db = Database(settings.db_path)
         self.db.seed_defaults()
         self.last_bot_messages: dict[int, int] = {}
+        self.active_callback_messages: dict[int, int] = {}
         self.api.set_my_commands(
             [
                 {"command": "start", "description": "Open the marketplace"},
@@ -83,6 +87,12 @@ class MarketplaceBot:
         except ValueError:
             return bn
 
+    def amount(self, chat_id: int, cents: int) -> str:
+        return money(cents, self.db.get_user(chat_id)["language"])
+
+    def currency_name(self, chat_id: int) -> str:
+        return "USDT" if self.db.get_user(chat_id)["language"] == "en" else "Tk"
+
     def delete_previous(self, chat_id: int) -> None:
         message_id = self.last_bot_messages.pop(chat_id, None)
         if message_id:
@@ -98,6 +108,15 @@ class MarketplaceBot:
         replace: bool = True,
         track: bool = True,
     ) -> int:
+        active_message_id = self.active_callback_messages.get(chat_id) if replace else None
+        if active_message_id:
+            try:
+                self.api.edit_message(chat_id, active_message_id, text, markup, parse_mode)
+                self.last_bot_messages[chat_id] = active_message_id
+                self.active_callback_messages.pop(chat_id, None)
+                return active_message_id
+            except Exception:
+                self.active_callback_messages.pop(chat_id, None)
         if replace:
             self.delete_previous(chat_id)
         message_id = self.api.send_message(chat_id, text, markup, parse_mode)
@@ -182,11 +201,9 @@ class MarketplaceBot:
         message = callback["message"]
         chat_id = int(message["chat"]["id"])
         data = callback.get("data", "")
+        self.active_callback_messages[chat_id] = int(message["message_id"])
         self.db.ensure_user(user["id"], user.get("username"), user.get("first_name", ""))
         self.api.answer_callback(callback["id"])
-        self.api.delete_message(chat_id, int(message["message_id"]))
-        if self.last_bot_messages.get(chat_id) == int(message["message_id"]):
-            self.last_bot_messages.pop(chat_id, None)
         if data in ("cancel", "back"):
             self.cancel(chat_id)
         elif data == "menu":
@@ -200,6 +217,9 @@ class MarketplaceBot:
             self.show_options(chat_id, int(data.split(":")[1]))
         elif data.startswith("option:"):
             self.show_option(chat_id, int(data.split(":")[1]))
+        elif data.startswith("variant:"):
+            _, option_id, price_cents = data.split(":")
+            self.start_purchase(chat_id, int(option_id), int(price_cents))
         elif data.startswith("buy:"):
             self.start_purchase(chat_id, int(data.split(":")[1]))
         elif data == "deposit":
@@ -235,10 +255,22 @@ class MarketplaceBot:
             self.admin_products(chat_id, user["id"])
         elif data == "admin:new_category":
             self.start_new_category(chat_id, user["id"])
+        elif data.startswith("admin:category:rename:"):
+            self.start_category_rename(chat_id, user["id"], int(data.split(":")[3]))
+        elif data.startswith("admin:category:delete_confirm:"):
+            self.delete_category(chat_id, user["id"], int(data.split(":")[3]))
+        elif data.startswith("admin:category:delete:"):
+            self.confirm_category_delete(chat_id, user["id"], int(data.split(":")[3]))
         elif data.startswith("admin:category:"):
             self.admin_category(chat_id, user["id"], int(data.split(":")[2]))
         elif data.startswith("admin:new_option:"):
             self.start_new_option(chat_id, user["id"], int(data.split(":")[2]))
+        elif data.startswith("admin:option:rename:"):
+            self.start_option_rename(chat_id, user["id"], int(data.split(":")[3]))
+        elif data.startswith("admin:option:delete_confirm:"):
+            self.delete_option(chat_id, user["id"], int(data.split(":")[3]))
+        elif data.startswith("admin:option:delete:"):
+            self.confirm_option_delete(chat_id, user["id"], int(data.split(":")[3]))
         elif data.startswith("admin:option:"):
             self.admin_option(chat_id, user["id"], int(data.split(":")[2]))
         elif data.startswith("admin:add_stock:"):
@@ -247,6 +279,10 @@ class MarketplaceBot:
             self.select_stock_owner(chat_id, user["id"], data.split(":", 1)[1])
         elif data == "admin:payment":
             self.show_payment_setup(chat_id, user["id"])
+        elif data == "admin:commission":
+            self.show_commission_setup(chat_id, user["id"])
+        elif data == "commission:edit":
+            self.start_commission_setup(chat_id, user["id"])
         elif data.startswith("payment:"):
             self.start_payment_setup(chat_id, user["id"], data.split(":")[1])
         elif data == "admin:broadcast":
@@ -257,6 +293,8 @@ class MarketplaceBot:
             self.show_sales(chat_id, user["id"])
         elif data == "admin:balance":
             self.start_balance_adjustment(chat_id, user["id"])
+        elif data.startswith("balance_mode:"):
+            self.select_balance_mode(chat_id, user["id"], data)
 
     def main_reply_keyboard(self, chat_id: int) -> dict[str, Any]:
         english = self.db.get_user(chat_id)["language"] == "en"
@@ -327,8 +365,8 @@ class MarketplaceBot:
         user = self.db.get_user(chat_id)
         self.send(
             chat_id,
-            f"💳 Available balance: {money(user['balance_cents'])}\n"
-            f"🔒 Reserved withdrawals: {money(user['reserved_cents'])}",
+            f"💳 Available balance: {self.amount(chat_id, user['balance_cents'])}\n"
+            f"🔒 Reserved withdrawals: {self.amount(chat_id, user['reserved_cents'])}",
             self.main_reply_keyboard(chat_id),
         )
 
@@ -338,9 +376,10 @@ class MarketplaceBot:
             SELECT c.id, c.name,
               COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
             FROM categories c
-            LEFT JOIN options o ON o.category_id=c.id
+            LEFT JOIN options o ON o.category_id=c.id AND o.is_deleted=0
             LEFT JOIN inventory_batches b ON b.option_id=o.id
             LEFT JOIN inventory_items i ON i.batch_id=b.id
+            WHERE c.is_deleted=0
             GROUP BY c.id ORDER BY c.name
             """
         ).fetchall()
@@ -352,7 +391,12 @@ class MarketplaceBot:
         self.send(chat_id, "Choose a category:", inline_keyboard(rows))
 
     def show_options(self, chat_id: int, category_id: int) -> None:
-        category = self.db.connection.execute("SELECT * FROM categories WHERE id=?", (category_id,)).fetchone()
+        category = self.db.connection.execute(
+            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+        ).fetchone()
+        if not category:
+            self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
+            return
         options = self.db.connection.execute(
             """
             SELECT o.id, o.name,
@@ -360,7 +404,7 @@ class MarketplaceBot:
             FROM options o
             LEFT JOIN inventory_batches b ON b.option_id=o.id
             LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE o.category_id=? GROUP BY o.id ORDER BY o.name
+            WHERE o.category_id=? AND o.is_deleted=0 GROUP BY o.id ORDER BY o.name
             """,
             (category_id,),
         ).fetchall()
@@ -376,29 +420,67 @@ class MarketplaceBot:
         if not option:
             self.send(chat_id, "Option not found.", self.main_reply_keyboard(chat_id))
             return
+        variants = self.db.option_price_variants(option_id)
+        if not variants:
+            self.send(
+                chat_id,
+                f"📦 {option['category_name']} / {option['name']}\nAvailable Stock: 0\nCurrently unavailable.",
+                inline_keyboard(
+                    [[("🔙 Back", f"category:{option['category_id']}"), ("🏠 Main Menu", "menu")]]
+                ),
+            )
+            return
+        rows = [
+            [
+                (
+                    f"{option['name']} - {self.amount(chat_id, row['price_cents'])} "
+                    f"(Stock: {row['available_stock']})",
+                    f"variant:{option_id}:{row['price_cents']}",
+                )
+            ]
+            for row in variants
+        ]
+        rows.append([("🔙 Back", f"category:{option['category_id']}"), ("🏠 Main Menu", "menu")])
         self.send(
             chat_id,
-            f"📦 {option['category_name']} / {option['name']}\n"
-            f"Available Stock: {option['available_stock']}\n\n"
-            "Enter how many you want to buy:",
-            inline_keyboard([[("🛒 Buy", f"buy:{option_id}")], [("🔙 Back", f"category:{option['category_id']}"), ("🏠 Main Menu", "menu")]]),
+            f"📦 {option['category_name']} / {option['name']}\nChoose a price variant:",
+            inline_keyboard(rows),
         )
 
-    def start_purchase(self, chat_id: int, option_id: int) -> None:
+    def start_purchase(self, chat_id: int, option_id: int, price_cents: int | None = None) -> None:
         option = self.db.option(option_id)
         if not option or option["available_stock"] <= 0:
             self.send(chat_id, "📦 Available Stock: 0\nCurrently unavailable.", self.main_reply_keyboard(chat_id))
             return
-        self.db.set_state(chat_id, "purchase_quantity", json.dumps({"option_id": option_id}))
+        variants = self.db.option_price_variants(option_id)
+        if price_cents is None:
+            if len(variants) != 1:
+                self.show_option(chat_id, option_id)
+                return
+            price_cents = variants[0]["price_cents"]
+        selected = next((row for row in variants if row["price_cents"] == price_cents), None)
+        if selected is None or selected["available_stock"] <= 0:
+            self.send(chat_id, "📦 That price variant is currently unavailable.", self.main_reply_keyboard(chat_id))
+            return
+        self.db.set_state(
+            chat_id,
+            "purchase_quantity",
+            json.dumps({"option_id": option_id, "price_cents": price_cents}),
+        )
         self.send(
             chat_id,
-            f"Available Stock: {option['available_stock']}\nEnter how many you want to buy:",
+            f"{option['name']} - {self.amount(chat_id, price_cents)}\n"
+            f"Available Stock: {selected['available_stock']}\nEnter how many you want to buy:",
             inline_keyboard([[("❌ Cancel", "cancel")]]),
         )
 
     def start_deposit(self, chat_id: int) -> None:
         methods = self.db.connection.execute(
-            "SELECT * FROM payment_methods WHERE is_active=1 ORDER BY id"
+            """
+            SELECT * FROM payment_methods
+            WHERE is_active=1 AND method_key IN ('bkash', 'binance')
+            ORDER BY id
+            """
         ).fetchall()
         rows = [[(method["display_name"], f"deposit_method:{method['method_key']}")] for method in methods]
         rows.append([("❌ Cancel", "cancel")])
@@ -415,7 +497,8 @@ class MarketplaceBot:
         self.db.set_state(chat_id, "deposit_amount", json.dumps({"method_key": method_key}))
         self.send(
             chat_id,
-            f"{method['display_name']} details:\n{method['details']}\n\nEnter deposit amount:",
+            f"{method['display_name']} details:\n{method['details']}\n\n"
+            f"Enter deposit amount in {self.currency_name(chat_id)}:",
             inline_keyboard([[("❌ Cancel", "cancel")]]),
         )
 
@@ -426,31 +509,35 @@ class MarketplaceBot:
             "Choose withdrawal method:",
             inline_keyboard(
                 [
-                    [("bKash", "withdraw_method:bkash"), ("Nagad", "withdraw_method:nagad")],
-                    [("Binance", "withdraw_method:binance")],
+                    [("bKash", "withdraw_method:bkash"), ("Binance", "withdraw_method:binance")],
                     [("❌ Cancel", "cancel")],
                 ]
             ),
         )
 
     def select_withdrawal_method(self, chat_id: int, method_key: str) -> None:
-        labels = {"bkash": "Bkash number", "nagad": "Nagad number", "binance": "Binance address"}
+        labels = {"bkash": "Bkash number", "binance": "Binance wallet address"}
         if method_key not in labels:
             self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
             return
         self.db.set_state(chat_id, "withdraw_amount", json.dumps({"method_key": method_key}))
-        self.send(chat_id, f"Enter your {labels[method_key]} amount:", inline_keyboard([[("❌ Cancel", "cancel")]]))
+        self.send(
+            chat_id,
+            f"Enter withdrawal amount in {self.currency_name(chat_id)}.\n"
+            f"Then enter your {labels[method_key]}.",
+            inline_keyboard([[("❌ Cancel", "cancel")]]),
+        )
 
     def show_support(self, chat_id: int) -> None:
         self.send(
             chat_id,
             "Need help? Click below to contact the Support Admin directly.",
-            url_keyboard("Click here to contact Support Admin", f"https://t.me/{self.settings.support_admin_username}"),
+            url_keyboard("Click here to contact Support Admin", "https://t.me/Sojib31_4"),
         )
 
     def handle_input(self, chat_id: int, text: str, state: str, data: dict[str, Any]) -> None:
         if state == "deposit_amount":
-            amount = self.parse_amount(text)
+            amount = self.parse_amount(text, chat_id)
             if amount is None:
                 self.send(chat_id, "❌ Enter a valid positive number.", inline_keyboard([[("❌ Cancel", "cancel")]]))
                 return
@@ -462,11 +549,11 @@ class MarketplaceBot:
             self.db.set_state(chat_id, "deposit_confirm", json.dumps(data))
             self.send(
                 chat_id,
-                f"Deposit preview:\nMethod: {data['method_key']}\nAmount: {money(data['amount_cents'])}\nTXID: {text}\n\nConfirm?",
+                f"Deposit preview:\nMethod: {data['method_key']}\nAmount: {self.amount(chat_id, data['amount_cents'])}\nTXID: {text}\n\nConfirm?",
                 inline_keyboard([[("✅ Confirm", "deposit_confirm"), ("❌ Cancel", "cancel")]]),
             )
         elif state == "withdraw_amount":
-            amount = self.parse_amount(text)
+            amount = self.parse_amount(text, chat_id)
             user = self.db.get_user(chat_id)
             if amount is None:
                 self.send(chat_id, "❌ Enter a valid positive number.", inline_keyboard([[("❌ Cancel", "cancel")]]))
@@ -474,7 +561,8 @@ class MarketplaceBot:
             if amount > user["balance_cents"]:
                 self.send(
                     chat_id,
-                    f"❌ Required: {money(amount)}\nCurrent balance: {money(user['balance_cents'])}\nTry again.",
+                    f"❌ Required: {self.amount(chat_id, amount)}\n"
+                    f"Current balance: {self.amount(chat_id, user['balance_cents'])}\nTry again.",
                     inline_keyboard([[("❌ Cancel", "cancel")]]),
                 )
                 return
@@ -491,7 +579,7 @@ class MarketplaceBot:
             self.db.set_state(chat_id, "withdraw_confirm", json.dumps(data))
             self.send(
                 chat_id,
-                f"Withdrawal preview:\nMethod: {data['method_key']}\nAmount: {money(data['amount_cents'])}\nDetails: {text}\n\nConfirm?",
+                f"Withdrawal preview:\nMethod: {data['method_key']}\nAmount: {self.amount(chat_id, data['amount_cents'])}\nDetails: {text}\n\nConfirm?",
                 inline_keyboard([[("✅ Confirm", "withdraw_confirm"), ("❌ Cancel", "cancel")]]),
             )
         elif state == "purchase_quantity":
@@ -500,7 +588,10 @@ class MarketplaceBot:
                 return
             try:
                 quote = self.db.quote_purchase(
-                    data["option_id"], int(text), self.settings.admin_user_id
+                    data["option_id"],
+                    int(text),
+                    self.settings.admin_user_id,
+                    data["price_cents"],
                 )
             except ValueError as error:
                 self.send(chat_id, f"❌ {error}", inline_keyboard([[("❌ Cancel", "cancel")]]))
@@ -509,7 +600,8 @@ class MarketplaceBot:
             if quote["total_cents"] > user["balance_cents"]:
                 self.send(
                     chat_id,
-                    f"❌ Required: {money(quote['total_cents'])}\nCurrent balance: {money(user['balance_cents'])}",
+                    f"❌ Required: {self.amount(chat_id, quote['total_cents'])}\n"
+                    f"Current balance: {self.amount(chat_id, user['balance_cents'])}",
                     inline_keyboard([[("❌ Cancel", "cancel")]]),
                 )
                 return
@@ -521,12 +613,19 @@ class MarketplaceBot:
             self.db.set_state(chat_id, "purchase_confirm", json.dumps(data))
             self.send(
                 chat_id,
-                f"You are buying {quote['quantity']} accounts for {money(quote['total_cents'])}. Confirm?",
+                f"You are buying {quote['quantity']} accounts for {self.amount(chat_id, quote['total_cents'])}. Confirm?",
                 inline_keyboard([[("✅ Confirm", "purchase_confirm"), ("❌ Cancel", "cancel")]]),
             )
         elif state == "category_name":
             try:
                 category = self.db.create_category(text)
+                self.db.clear_state(chat_id)
+                self.admin_category(chat_id, chat_id, category["id"])
+            except ValueError as error:
+                self.send(chat_id, f"❌ {error}\nTry another name.", inline_keyboard([[("❌ Cancel", "cancel")]]))
+        elif state == "category_rename":
+            try:
+                category = self.db.rename_category(data["category_id"], text)
                 self.db.clear_state(chat_id)
                 self.admin_category(chat_id, chat_id, category["id"])
             except ValueError as error:
@@ -538,23 +637,38 @@ class MarketplaceBot:
                 self.admin_option(chat_id, chat_id, option["id"])
             except ValueError as error:
                 self.send(chat_id, f"❌ {error}\nTry another name.", inline_keyboard([[("❌ Cancel", "cancel")]]))
+        elif state == "option_rename":
+            try:
+                option = self.db.rename_option(data["option_id"], text)
+                self.db.clear_state(chat_id)
+                self.admin_option(chat_id, chat_id, option["id"])
+            except ValueError as error:
+                self.send(chat_id, f"❌ {error}\nTry another name.", inline_keyboard([[("❌ Cancel", "cancel")]]))
         elif state == "stock_owner_uid":
             if not text.isdigit() or not self.db.find_user(text):
                 self.send(chat_id, "❌ User must send /start first. Enter a valid UID.", inline_keyboard([[("❌ Cancel", "cancel")]]))
                 return
             data["owner_telegram_user_id"] = int(text)
             self.db.set_state(chat_id, "stock_lines", json.dumps(data))
-            self.send(chat_id, "Send the accounts line by line.", inline_keyboard([[("❌ Cancel", "cancel")]]))
+            self.send(
+                chat_id,
+                "Send the accounts separated by `#` (hashtag).",
+                inline_keyboard([[("❌ Cancel", "cancel")]]),
+            )
         elif state == "stock_lines":
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            lines = [account.strip() for account in text.split("#") if account.strip()]
             if not lines:
-                self.send(chat_id, "❌ Send at least one account line.", inline_keyboard([[("❌ Cancel", "cancel")]]))
+                self.send(
+                    chat_id,
+                    "❌ Send at least one account separated by `#`.",
+                    inline_keyboard([[("❌ Cancel", "cancel")]]),
+                )
                 return
             data["account_lines"] = lines
             self.db.set_state(chat_id, "stock_price", json.dumps(data))
             self.send(chat_id, f"{len(lines)} account(s) received. Enter price per account:", inline_keyboard([[("❌ Cancel", "cancel")]]))
         elif state == "stock_price":
-            amount = self.parse_amount(text)
+            amount = self.parse_amount(text, chat_id)
             if amount is None:
                 self.send(chat_id, "❌ Enter a valid positive price.", inline_keyboard([[("❌ Cancel", "cancel")]]))
                 return
@@ -562,7 +676,9 @@ class MarketplaceBot:
             self.db.set_state(chat_id, "stock_confirm", json.dumps(data))
             self.send(
                 chat_id,
-                f"Stock preview:\nAccounts: {len(data['account_lines'])}\nPrice/account: {money(amount)}\nOwner UID: {data['owner_telegram_user_id']}\n\nConfirm upload?",
+                f"Stock preview:\nAccounts: {len(data['account_lines'])}\n"
+                f"Price/account: {self.amount(chat_id, amount)}\n"
+                f"Owner UID: {data['owner_telegram_user_id']}\n\nConfirm upload?",
                 inline_keyboard([[("✅ Confirm", "stock_confirm"), ("❌ Cancel", "cancel")]]),
             )
         elif state == "balance_user":
@@ -571,26 +687,35 @@ class MarketplaceBot:
                 self.send(chat_id, "❌ Username/UID not found. The user must send /start first.", inline_keyboard([[("❌ Cancel", "cancel")]]))
                 return
             data["target_telegram_user_id"] = user["telegram_user_id"]
-            self.db.set_state(chat_id, "balance_amount", json.dumps(data))
-            self.send(chat_id, "Enter amount. Use a negative number to deduct:", inline_keyboard([[("❌ Cancel", "cancel")]]))
+            username = f"@{user['username']}" if user["username"] else str(user["telegram_user_id"])
+            self.db.set_state(chat_id, "balance_user", json.dumps(data))
+            self.send(
+                chat_id,
+                f"User {username} found.\nCurrent Balance: {self.amount(chat_id, user['balance_cents'])}",
+                inline_keyboard(
+                    [
+                        [("➕ Add Balance", f"balance_mode:add:{user['telegram_user_id']}")],
+                        [("➖ Deduct Balance", f"balance_mode:deduct:{user['telegram_user_id']}")],
+                        [("❌ Cancel", "cancel")],
+                    ]
+                ),
+            )
         elif state == "balance_amount":
-            try:
-                amount = round(float(text.replace(",", "")) * 100)
-            except ValueError:
+            amount = self.parse_amount(text, chat_id)
+            if amount is None:
                 self.send(chat_id, "❌ Enter a valid number.", inline_keyboard([[("❌ Cancel", "cancel")]]))
                 return
-            if amount == 0:
-                self.send(chat_id, "❌ Amount cannot be zero.", inline_keyboard([[("❌ Cancel", "cancel")]]))
-                return
-            data["amount_cents"] = amount
+            data["amount_cents"] = amount if data["direction"] == "add" else -amount
             self.db.set_state(chat_id, "balance_note", json.dumps(data))
-            self.send(chat_id, "Enter an adjustment note:", inline_keyboard([[("❌ Cancel", "cancel")]]))
+            action = "add" if data["direction"] == "add" else "deduct"
+            self.send(chat_id, f"Enter a note for this {action} adjustment:", inline_keyboard([[("❌ Cancel", "cancel")]]))
         elif state == "balance_note":
             data["note"] = text
             self.db.set_state(chat_id, "balance_confirm", json.dumps(data))
             self.send(
                 chat_id,
-                f"Balance adjustment:\nUser: {data['target_telegram_user_id']}\nAmount: {money(data['amount_cents'])}\nNote: {text}\n\nConfirm?",
+                f"Balance adjustment:\nUser: {data['target_telegram_user_id']}\n"
+                f"Amount: {self.amount(chat_id, data['amount_cents'])}\nNote: {text}\n\nConfirm?",
                 inline_keyboard([[("✅ Confirm", "balance_confirm"), ("❌ Cancel", "cancel")]]),
             )
         elif state == "payment_details":
@@ -601,14 +726,27 @@ class MarketplaceBot:
             self.db.connection.commit()
             self.db.clear_state(chat_id)
             self.show_payment_setup(chat_id, chat_id)
+        elif state == "commission_percent":
+            if not text.isdigit() or not 0 <= int(text) <= 100:
+                self.send(
+                    chat_id,
+                    "❌ Enter a whole-number commission from 0 to 100.",
+                    inline_keyboard([[("❌ Cancel", "cancel")]]),
+                )
+                return
+            self.db.set_vendor_commission_percent(int(text))
+            self.db.clear_state(chat_id)
+            self.show_commission_setup(chat_id, chat_id)
         elif state == "broadcast":
             self.db.set_state(chat_id, "broadcast_confirm", json.dumps({"message": text}))
             self.send(chat_id, f"Broadcast preview:\n\n{text}\n\nSend?", inline_keyboard([[("✅ Send Broadcast", "broadcast_confirm"), ("❌ Cancel", "cancel")]]))
 
-    @staticmethod
-    def parse_amount(text: str) -> int | None:
+    def parse_amount(self, text: str, chat_id: int) -> int | None:
         try:
-            cents = round(float(text.replace(",", "")) * 100)
+            value = float(text.replace(",", ""))
+            if self.db.get_user(chat_id)["language"] == "en":
+                value *= BDT_PER_USDT
+            cents = round(value * 100)
             return cents if cents > 0 else None
         except ValueError:
             return None
@@ -639,6 +777,7 @@ class MarketplaceBot:
                 self.send(chat_id, f"❌ {error}", self.main_reply_keyboard(chat_id))
         elif state == "purchase_confirm":
             try:
+                commission_percent = self.db.get_vendor_commission_percent()
                 order, accounts = self.db.create_market_purchase(
                     chat_id,
                     data["option_id"],
@@ -646,15 +785,37 @@ class MarketplaceBot:
                     data["request_key"],
                     self.settings.admin_user_id,
                     data["total_cents"],
+                    data["price_cents"],
+                    commission_percent,
                 )
                 self.db.clear_state(chat_id)
+                for payout in self.db.market_order_vendor_payouts(
+                    order["id"], self.settings.admin_user_id, commission_percent
+                ):
+                    try:
+                        self.send(
+                            payout["telegram_user_id"],
+                            f"🎉 Good news! Your product {payout['option_name']} has been sold.\n"
+                            f"{self.amount(payout['telegram_user_id'], payout['amount_cents'])} "
+                            "credited to your balance after commission.\n"
+                            f"Current Balance: {self.amount(payout['telegram_user_id'], payout['balance_cents'])}",
+                            self.main_reply_keyboard(payout["telegram_user_id"]),
+                        )
+                    except Exception as error:
+                        print(
+                            f"Vendor notification failed for {payout['telegram_user_id']}: {error}"
+                        )
                 self.send(
                     chat_id,
-                    f"✅ Purchase successful!\nOrder: #{order['id']}\nTotal: {money(order['total_cents'])}",
+                    f"✅ Purchase successful!\nOrder: #{order['id']}\n"
+                    f"Total: {self.amount(chat_id, order['total_cents'])}",
                     self.main_reply_keyboard(chat_id),
                     track=False,
                 )
-                self.send(chat_id, "\n".join(accounts), self.main_reply_keyboard(chat_id), replace=False)
+                delivery = "\n".join(
+                    f"Account {index}: {account}" for index, account in enumerate(accounts, start=1)
+                )
+                self.send(chat_id, delivery, self.main_reply_keyboard(chat_id), replace=False)
             except ValueError as error:
                 self.db.clear_state(chat_id)
                 self.send(chat_id, f"❌ Purchase failed: {error}", self.main_reply_keyboard(chat_id))
@@ -666,6 +827,27 @@ class MarketplaceBot:
                     data["price_cents"],
                     data["account_lines"],
                 )
+                context = self.db.inventory_batch_context(batch["id"])
+                alert = (
+                    "📢 New Stock Alert!\n"
+                    f"Category: {context['category_name']}\n"
+                    f"Variant: {context['option_name']}\n"
+                    f"Price: {context['price_cents'] / 100:.2f} Tk\n"
+                    f"Available Stock: {context['item_count']} pcs added!"
+                )
+                for row in self.db.connection.execute(
+                    "SELECT telegram_user_id FROM users"
+                ).fetchall():
+                    try:
+                        self.send(
+                            row["telegram_user_id"],
+                            alert,
+                            self.main_reply_keyboard(row["telegram_user_id"]),
+                            replace=False,
+                            track=False,
+                        )
+                    except Exception as error:
+                        print(f"New stock notification failed for {row['telegram_user_id']}: {error}")
                 self.db.clear_state(chat_id)
                 self.send(chat_id, f"✅ Stock uploaded. Added {batch['item_count']} account(s).", inline_keyboard([[("⚙️ Admin Panel", "admin"), ("🏠 Main Menu", "menu")]]))
             except ValueError as error:
@@ -675,8 +857,8 @@ class MarketplaceBot:
             try:
                 user = self.db.adjust_balance(data["target_telegram_user_id"], data["amount_cents"], data["note"])
                 self.db.clear_state(chat_id)
-                self.send(chat_id, f"✅ Balance updated.\nCurrent balance: {money(user['balance_cents'])}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
-                self.send(user["telegram_user_id"], f"Your balance was adjusted by admin.\nCurrent balance: {money(user['balance_cents'])}", self.main_reply_keyboard(user["telegram_user_id"]))
+                self.send(chat_id, f"✅ Balance updated.\nCurrent balance: {self.amount(chat_id, user['balance_cents'])}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+                self.send(user["telegram_user_id"], f"Your balance was adjusted by admin.\nCurrent balance: {self.amount(user['telegram_user_id'], user['balance_cents'])}", self.main_reply_keyboard(user["telegram_user_id"]))
             except ValueError as error:
                 self.db.clear_state(chat_id)
                 self.send(chat_id, f"❌ Balance adjustment failed: {error}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
@@ -707,6 +889,7 @@ class MarketplaceBot:
                     [("Pending Deposits", "admin:deposits"), ("Pending Withdrawals", "admin:withdrawals")],
                     [("Users & Balance", "admin:balance"), ("Inventory", "admin:products")],
                     [("Payment Setup", "admin:payment")],
+                    [("Commission Settings", "admin:commission")],
                     [("Sales", "admin:sales"), ("Orders", "admin:orders")],
                     [("Broadcast", "admin:broadcast")],
                     [("🏠 Main Menu", "menu")],
@@ -723,10 +906,70 @@ class MarketplaceBot:
         self.db.set_state(chat_id, "balance_user")
         self.send(chat_id, "Enter @username or Telegram UID:", inline_keyboard([[("❌ Cancel", "cancel")]]))
 
+    def show_commission_setup(self, chat_id: int, user_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        percent = self.db.get_vendor_commission_percent()
+        self.send(
+            chat_id,
+            f"Vendor commission: {percent}%\nAdmin platform fee: {100 - percent}%",
+            inline_keyboard(
+                [
+                    [("✏️ Edit Commission", "commission:edit")],
+                    [("🔙 Back", "admin"), ("🏠 Main Menu", "menu")],
+                ]
+            ),
+        )
+
+    def start_commission_setup(self, chat_id: int, user_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        self.db.set_state(chat_id, "commission_percent")
+        self.send(
+            chat_id,
+            "Enter vendor commission percentage (0-100):",
+            inline_keyboard([[("❌ Cancel", "cancel")]]),
+        )
+
+    def select_balance_mode(self, chat_id: int, user_id: int, data: str) -> None:
+        if not self.is_admin(user_id):
+            return
+        state = self.db.get_state(chat_id)
+        parts = data.split(":")
+        if not state or state["state"] != "balance_user" or len(parts) != 3:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        direction, target_text = parts[1], parts[2]
+        if direction not in {"add", "deduct"} or not target_text.isdigit():
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        user = self.db.find_user(target_text)
+        if not user:
+            self.send(chat_id, "❌ User not found.", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        self.db.set_state(
+            chat_id,
+            "balance_amount",
+            json.dumps(
+                {
+                    "target_telegram_user_id": user["telegram_user_id"],
+                    "direction": direction,
+                }
+            ),
+        )
+        action = "add" if direction == "add" else "deduct"
+        self.send(
+            chat_id,
+            f"Enter amount to {action} for @{user['username'] or user['telegram_user_id']}:",
+            inline_keyboard([[("❌ Cancel", "cancel")]]),
+        )
+
     def admin_products(self, chat_id: int, user_id: int) -> None:
         if not self.is_admin(user_id):
             return
-        categories = self.db.connection.execute("SELECT * FROM categories ORDER BY name").fetchall()
+        categories = self.db.connection.execute(
+            "SELECT * FROM categories WHERE is_deleted=0 ORDER BY name"
+        ).fetchall()
         rows = [[(f"📁 {category['name']}", f"admin:category:{category['id']}")] for category in categories]
         rows.append([("➕ Create Category", "admin:new_category")])
         rows.append([("⚙️ Admin Panel", "admin")])
@@ -738,10 +981,62 @@ class MarketplaceBot:
         self.db.set_state(chat_id, "category_name")
         self.send(chat_id, "Enter category name:", inline_keyboard([[("❌ Cancel", "cancel")]]))
 
+    def start_category_rename(self, chat_id: int, user_id: int, category_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        category = self.db.connection.execute(
+            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+        ).fetchone()
+        if not category:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        self.db.set_state(chat_id, "category_rename", json.dumps({"category_id": category_id}))
+        self.send(
+            chat_id,
+            f"Current category name: {category['name']}\nEnter the new category name:",
+            inline_keyboard([[("❌ Cancel", f"admin:category:{category_id}")]]),
+        )
+
+    def confirm_category_delete(self, chat_id: int, user_id: int, category_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        category = self.db.connection.execute(
+            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+        ).fetchone()
+        if not category:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        self.send(
+            chat_id,
+            f"Delete category '{category['name']}'?\nAll available linked stock will be removed.",
+            inline_keyboard(
+                [
+                    [("🗑 Confirm Delete", f"admin:category:delete_confirm:{category_id}")],
+                    [("🔙 Back", f"admin:category:{category_id}")],
+                ]
+            ),
+        )
+
+    def delete_category(self, chat_id: int, user_id: int, category_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        try:
+            category = self.db.delete_category(category_id)
+            self.db.clear_state(chat_id)
+            self.send(
+                chat_id,
+                f"✅ Category '{category['name']}' deleted. Linked available stock was removed.",
+                inline_keyboard([[("📦 Inventory", "admin:products"), ("⚙️ Admin Panel", "admin")]]),
+            )
+        except ValueError as error:
+            self.send(chat_id, f"❌ {error}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+
     def admin_category(self, chat_id: int, user_id: int, category_id: int) -> None:
         if not self.is_admin(user_id):
             return
-        category = self.db.connection.execute("SELECT * FROM categories WHERE id=?", (category_id,)).fetchone()
+        category = self.db.connection.execute(
+            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+        ).fetchone()
         if not category:
             self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
             return
@@ -750,11 +1045,12 @@ class MarketplaceBot:
             SELECT o.id, o.name, COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
             FROM options o LEFT JOIN inventory_batches b ON b.option_id=o.id
             LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE o.category_id=? GROUP BY o.id ORDER BY o.name
+            WHERE o.category_id=? AND o.is_deleted=0 GROUP BY o.id ORDER BY o.name
             """,
             (category_id,),
         ).fetchall()
         rows = [[(f"{option['name']} — Stock: {option['stock']}", f"admin:option:{option['id']}")] for option in options]
+        rows.append([("✏️ Rename Category", f"admin:category:rename:{category_id}"), ("🗑 Delete Category", f"admin:category:delete:{category_id}")])
         rows.append([("➕ Add Option", f"admin:new_option:{category_id}")])
         rows.append([("🔙 Back", "admin:products"), ("⚙️ Admin Panel", "admin")])
         self.send(chat_id, f"Category: {category['name']}", inline_keyboard(rows))
@@ -764,6 +1060,57 @@ class MarketplaceBot:
             return
         self.db.set_state(chat_id, "option_name", json.dumps({"category_id": category_id}))
         self.send(chat_id, "Enter option/sub-category name:", inline_keyboard([[("❌ Cancel", "cancel")]]))
+
+    def start_option_rename(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        if not option:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        self.db.set_state(chat_id, "option_rename", json.dumps({"option_id": option_id}))
+        self.send(
+            chat_id,
+            f"Current sub-category name: {option['name']}\nEnter the new name:",
+            inline_keyboard([[("❌ Cancel", f"admin:option:{option_id}")]]),
+        )
+
+    def confirm_option_delete(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        if not option:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
+            return
+        self.send(
+            chat_id,
+            f"Delete sub-category '{option['name']}'?\nAll available linked stock will be removed.",
+            inline_keyboard(
+                [
+                    [("🗑 Confirm Delete", f"admin:option:delete_confirm:{option_id}")],
+                    [("🔙 Back", f"admin:option:{option_id}")],
+                ]
+            ),
+        )
+
+    def delete_option(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        try:
+            option = self.db.delete_option(option_id)
+            self.db.clear_state(chat_id)
+            self.send(
+                chat_id,
+                f"✅ Sub-category '{option['name']}' deleted. Linked available stock was removed.",
+                inline_keyboard(
+                    [
+                        [("📁 Back to Category", f"admin:category:{option['category_id']}")],
+                        [("⚙️ Admin Panel", "admin")],
+                    ]
+                ),
+            )
+        except ValueError as error:
+            self.send(chat_id, f"❌ {error}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
 
     def admin_option(self, chat_id: int, user_id: int, option_id: int) -> None:
         if not self.is_admin(user_id):
@@ -778,6 +1125,7 @@ class MarketplaceBot:
             inline_keyboard(
                 [
                     [("➕ Add Stock", f"admin:add_stock:{option_id}")],
+                    [("✏️ Rename", f"admin:option:rename:{option_id}"), ("🗑 Delete", f"admin:option:delete:{option_id}")],
                     [("🔙 Back", f"admin:category:{option['category_id']}"), ("⚙️ Admin Panel", "admin")],
                 ]
             ),
@@ -810,7 +1158,11 @@ class MarketplaceBot:
         if owner_type == "admin":
             data["owner_telegram_user_id"] = self.settings.admin_user_id
             self.db.set_state(chat_id, "stock_lines", json.dumps(data))
-            self.send(chat_id, "Send the accounts line by line.", inline_keyboard([[("❌ Cancel", "cancel")]]))
+            self.send(
+                chat_id,
+                "Send the accounts separated by `#` (hashtag).",
+                inline_keyboard([[("❌ Cancel", "cancel")]]),
+            )
         elif owner_type == "user":
             self.db.set_state(chat_id, "stock_owner_uid", json.dumps(data))
             self.send(chat_id, "Enter target user's UID:", inline_keyboard([[("❌ Cancel", "cancel")]]))
@@ -852,7 +1204,8 @@ class MarketplaceBot:
             self.send(
                 chat_id,
                 f"Deposit #{deposit['id']}\nUser: @{deposit['username'] or '-'} ({deposit['telegram_user_id']})\n"
-                f"Amount: {money(deposit['amount_cents'])}\nMethod: {deposit['method_key']}\nTXID: {deposit['txid']}",
+                f"Amount: {self.amount(chat_id, deposit['amount_cents'])}\n"
+                f"Method: {deposit['method_key']}\nTXID: {deposit['txid']}",
                 inline_keyboard([[("✅ Approve", f"deposit:approve:{deposit['id']}"), ("❌ Reject", f"deposit:reject:{deposit['id']}")]]),
                 replace=False,
                 track=False,
@@ -868,7 +1221,12 @@ class MarketplaceBot:
             self.send(chat_id, f"✅ Deposit #{deposit['id']} {deposit['status']}.", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
             if action == "approve":
                 user = self.db.connection.execute("SELECT telegram_user_id FROM users WHERE id=?", (deposit["user_id"],)).fetchone()
-                self.send(user["telegram_user_id"], f"✅ Deposit approved. Added: {money(deposit['amount_cents'])}", self.main_reply_keyboard(user["telegram_user_id"]))
+                self.send(
+                    user["telegram_user_id"],
+                    f"✅ Deposit approved. Added: "
+                    f"{self.amount(user['telegram_user_id'], deposit['amount_cents'])}",
+                    self.main_reply_keyboard(user["telegram_user_id"]),
+                )
         except ValueError as error:
             self.send(chat_id, f"❌ {error}", inline_keyboard([[("⚙️ Admin Panel", "admin")]]))
 
@@ -888,7 +1246,8 @@ class MarketplaceBot:
             self.send(
                 chat_id,
                 f"Withdrawal #{item['id']}\nUser: @{item['username'] or '-'} ({item['telegram_user_id']})\n"
-                f"Amount: {money(item['amount_cents'])}\nMethod: {item['method_key']}\nPayout: {item['payout_details']}",
+                f"Amount: {self.amount(chat_id, item['amount_cents'])}\n"
+                f"Method: {item['method_key']}\nPayout: {item['payout_details']}",
                 inline_keyboard([[("✅ Paid & Approve", f"withdrawal:approve:{item['id']}"), ("❌ Reject", f"withdrawal:reject:{item['id']}")]]),
                 replace=False,
                 track=False,
@@ -915,7 +1274,9 @@ class MarketplaceBot:
         ).fetchone()
         self.send(
             chat_id,
-            f"Sales overview\nCompleted orders: {sales['order_count']}\nItems sold: {sales['total_items']}\nGross volume: {money(sales['total_cents'])}",
+            f"Sales overview\nCompleted orders: {sales['order_count']}\n"
+            f"Items sold: {sales['total_items']}\n"
+            f"Gross volume: {self.amount(chat_id, sales['total_cents'])}",
             inline_keyboard([[("⚙️ Admin Panel", "admin"), ("🏠 Main Menu", "menu")]]),
         )
 
@@ -930,7 +1291,8 @@ class MarketplaceBot:
             """
         ).fetchall()
         text = "Recent Orders:\n" + "\n".join(
-            f"#{row['id']} {row['option_name']} x{row['quantity']} | buyer {row['buyer_uid']} | {money(row['total_cents'])}"
+            f"#{row['id']} {row['option_name']} x{row['quantity']} | "
+            f"buyer {row['buyer_uid']} | {self.amount(chat_id, row['total_cents'])}"
             for row in rows
         ) if rows else "No orders yet."
         self.send(chat_id, text, inline_keyboard([[("⚙️ Admin Panel", "admin"), ("🏠 Main Menu", "menu")]]))

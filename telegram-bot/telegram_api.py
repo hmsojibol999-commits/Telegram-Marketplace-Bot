@@ -65,11 +65,19 @@ class TelegramApi:
     def answer_callback(self, callback_query_id: str, text: str = "") -> None:
         self.call("answerCallbackQuery", callback_query_id=callback_query_id, text=text)
 
-    def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict[str, Any] | None = None) -> None:
+    def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
         self.call(
             "editMessageText",
             chat_id=chat_id,
             message_id=message_id,
             text=text,
             reply_markup=reply_markup,
+            parse_mode=parse_mode,
         )
