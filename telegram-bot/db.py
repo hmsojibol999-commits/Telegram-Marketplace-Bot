@@ -615,6 +615,78 @@ class Database:
             (option_id,),
         ).fetchall()
 
+    def update_variant_price(self, option_id: int, old_price_cents: int, new_price_cents: int) -> int:
+        if new_price_cents <= 0:
+            raise ValueError("Price must be positive.")
+        with self.transaction() as connection:
+            available = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM inventory_items i
+                JOIN inventory_batches b ON b.id=i.batch_id
+                WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
+                """,
+                (option_id, old_price_cents),
+            ).fetchone()["count"]
+            if available == 0:
+                raise ValueError("That price variant has no available stock.")
+            connection.execute(
+                """
+                UPDATE inventory_batches
+                SET price_cents=?
+                WHERE option_id=? AND price_cents=?
+                  AND EXISTS (
+                    SELECT 1 FROM inventory_items i
+                    WHERE i.batch_id=inventory_batches.id AND i.status='available'
+                  )
+                """,
+                (new_price_cents, option_id, old_price_cents),
+            )
+            return int(available)
+
+    def remove_variant_stock(
+        self, option_id: int, price_cents: int, quantity: int | None = None
+    ) -> int:
+        if quantity is not None and quantity <= 0:
+            raise ValueError("Quantity must be positive.")
+        with self.transaction() as connection:
+            params: list[int] = [option_id, price_cents]
+            limit_sql = ""
+            if quantity is not None:
+                limit_sql = " LIMIT ?"
+                params.append(quantity)
+            rows = connection.execute(
+                f"""
+                SELECT i.id
+                FROM inventory_items i
+                JOIN inventory_batches b ON b.id=i.batch_id
+                WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
+                ORDER BY b.created_at, b.id, i.id
+                {limit_sql}
+                """,
+                params,
+            ).fetchall()
+            if quantity is not None and len(rows) < quantity:
+                raise ValueError(f"Available stock: {len(rows)}.")
+            ids = [row["id"] for row in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                connection.execute(
+                    f"DELETE FROM inventory_items WHERE id IN ({placeholders})",
+                    ids,
+                )
+                connection.execute(
+                    """
+                    DELETE FROM inventory_batches
+                    WHERE option_id=?
+                      AND NOT EXISTS (
+                        SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
+                      )
+                    """,
+                    (option_id,),
+                )
+            return len(ids)
+
     def quote_purchase(
         self,
         option_id: int,
