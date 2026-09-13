@@ -481,224 +481,283 @@ class Database:
             """,
             option_ids,
         )
-        connection.execute(
-            f"""
-            DELETE FROM inventory_batches
-            WHERE option_id IN ({placeholders})
-              AND NOT EXISTS (
-                SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
-              )
-            """,
-            option_ids,
-        )
+            connection.execute(
+        f"""
+        DELETE FROM inventory_batches
+        WHERE option_id IN ({placeholders})
+          AND NOT EXISTS (
+            SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
+          )
+        """,
+        option_ids,
+    )
 
-    def delete_option(self, option_id: int) -> sqlite3.Row:
-        with self.transaction() as connection:
-            option = connection.execute(
-                "SELECT * FROM options WHERE id=? AND is_deleted=0", (option_id,)
-            ).fetchone()
-            if option is None:
-                raise ValueError("Option not found.")
-            self._delete_available_stock(connection, [option_id])
-            sold = connection.execute(
-                """
-                SELECT 1
-                FROM inventory_items i
-                JOIN inventory_batches b ON b.id=i.batch_id
-                WHERE b.option_id=? AND i.status='sold'
-                LIMIT 1
-                """,
-                (option_id,),
-            ).fetchone()
-            if sold is None:
-                connection.execute("DELETE FROM options WHERE id=?", (option_id,))
-            else:
-                connection.execute("UPDATE options SET is_deleted=1 WHERE id=?", (option_id,))
-            return option
-
-    def delete_category(self, category_id: int) -> sqlite3.Row:
-        with self.transaction() as connection:
-            category = connection.execute(
-                "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
-            ).fetchone()
-            if category is None:
-                raise ValueError("Category not found.")
-            options = connection.execute(
-                "SELECT id FROM options WHERE category_id=? AND is_deleted=0", (category_id,)
-            ).fetchall()
-            option_ids = [row["id"] for row in options]
-            self._delete_available_stock(connection, option_ids)
-            sold = connection.execute(
-                f"""
-                SELECT 1
-                FROM inventory_items i
-                JOIN inventory_batches b ON b.id=i.batch_id
-                WHERE b.option_id IN ({",".join("?" for _ in option_ids)})
-                  AND i.status='sold'
-                LIMIT 1
-                """,
-                option_ids,
-            ).fetchone() if option_ids else None
-            if sold is None:
-                if option_ids:
-                    connection.execute(
-                        f"DELETE FROM options WHERE id IN ({','.join('?' for _ in option_ids)})",
-                        option_ids,
-                    )
-                connection.execute("DELETE FROM categories WHERE id=?", (category_id,))
-            else:
-                connection.execute("UPDATE categories SET is_deleted=1 WHERE id=?", (category_id,))
-                if option_ids:
-                    connection.execute(
-                        f"UPDATE options SET is_deleted=1 WHERE id IN ({','.join('?' for _ in option_ids)})",
-                        option_ids,
-                    )
-            return category
-
-    def add_inventory_batch(
-        self,
-        option_id: int,
-        owner_telegram_user_id: int,
-        price_cents: int,
-        account_lines: list[str],
-    ) -> sqlite3.Row:
-        clean_lines = [line.strip() for line in account_lines if line.strip()]
-        if not clean_lines:
-            raise ValueError("At least one non-empty account line is required.")
-        with self.transaction() as connection:
-            owner = connection.execute(
-                "SELECT id FROM users WHERE telegram_user_id=?", (owner_telegram_user_id,)
-            ).fetchone()
-            if owner is None:
-                raise ValueError("Product owner must start the bot first.")
-            cursor = connection.execute(
-                """
-                INSERT INTO inventory_batches (option_id, owner_user_id, price_cents, item_count)
-                VALUES (?, ?, ?, ?)
-                """,
-                (option_id, owner["id"], price_cents, len(clean_lines)),
-            )
-            batch_id = cursor.lastrowid
-            connection.executemany(
-                "INSERT INTO inventory_items (batch_id, secret_text) VALUES (?, ?)",
-                [(batch_id, line) for line in clean_lines],
-            )
-            return connection.execute(
-                "SELECT * FROM inventory_batches WHERE id=?", (batch_id,)
-            ).fetchone()
-
-    def option(self, option_id: int) -> sqlite3.Row | None:
-        return self.connection.execute(
+def delete_option(self, option_id: int) -> sqlite3.Row:
+    with self.transaction() as connection:
+        option = connection.execute(
+            "SELECT * FROM options WHERE id=? AND is_deleted=0", (option_id,)
+        ).fetchone()
+        if option is None:
+            raise ValueError("Option not found.")
+        self._delete_available_stock(connection, [option_id])
+        sold = connection.execute(
             """
-            SELECT o.*, c.name category_name,
-              COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) available_stock
-            FROM options o
-            JOIN categories c ON c.id=o.category_id
-            LEFT JOIN inventory_batches b ON b.option_id=o.id
-            LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE o.id=? AND o.is_deleted=0 AND c.is_deleted=0
-            GROUP BY o.id
+            SELECT 1
+            FROM inventory_items i
+            JOIN inventory_batches b ON b.id=i.batch_id
+            WHERE b.option_id=? AND i.status='sold'
+            LIMIT 1
             """,
             (option_id,),
         ).fetchone()
+        if sold is None:
+            connection.execute("DELETE FROM options WHERE id=?", (option_id,))
+        else:
+            connection.execute("UPDATE options SET is_deleted=1 WHERE id=?", (option_id,))
+        return option
 
-    def option_price_variants(self, option_id: int) -> list[sqlite3.Row]:
-        return self.connection.execute(
-            """
-            SELECT b.price_cents, COUNT(i.id) available_stock
-            FROM inventory_batches b
-            JOIN inventory_items i ON i.batch_id=b.id AND i.status='available'
-            WHERE b.option_id=?
-            GROUP BY b.price_cents
-            ORDER BY b.price_cents
-            """,
-            (option_id,),
+def delete_category(self, category_id: int) -> sqlite3.Row:
+    with self.transaction() as connection:
+        category = connection.execute(
+            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+        ).fetchone()
+        if category is None:
+            raise ValueError("Category not found.")
+        options = connection.execute(
+            "SELECT id FROM options WHERE category_id=? AND is_deleted=0", (category_id,)
         ).fetchall()
+        option_ids = [row["id"] for row in options]
+        self._delete_available_stock(connection, option_ids)
+        sold = connection.execute(
+            f"""
+            SELECT 1
+            FROM inventory_items i
+            JOIN inventory_batches b ON b.id=i.batch_id
+            WHERE b.option_id IN ({",".join("?" for _ in option_ids)})
+              AND i.status='sold'
+            LIMIT 1
+            """,
+            option_ids,
+        ).fetchone() if option_ids else None
+        if sold is None:
+            if option_ids:
+                connection.execute(
+                    f"DELETE FROM options WHERE id IN ({','.join('?' for _ in option_ids)})",
+                    option_ids,
+                )
+            connection.execute("DELETE FROM categories WHERE id=?", (category_id,))
+        else:
+            connection.execute("UPDATE categories SET is_deleted=1 WHERE id=?", (category_id,))
+            if option_ids:
+                connection.execute(
+                    f"UPDATE options SET is_deleted=1 WHERE id IN ({','.join('?' for _ in option_ids)})",
+                    option_ids,
+                )
+        return category
 
-    def update_variant_price(self, option_id: int, old_price_cents: int, new_price_cents: int) -> int:
-        if new_price_cents <= 0:
-            raise ValueError("Price must be positive.")
-        with self.transaction() as connection:
-            available = connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM inventory_items i
-                JOIN inventory_batches b ON b.id=i.batch_id
-                WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
-                """,
-                (option_id, old_price_cents),
-            ).fetchone()["count"]
-            if available == 0:
-                raise ValueError("That price variant has no available stock.")
+def add_inventory_batch(
+    self,
+    option_id: int,
+    owner_telegram_user_id: int,
+    price_cents: int,
+    account_lines: list[str],
+) -> sqlite3.Row:
+    clean_lines = [line.strip() for line in account_lines if line.strip()]
+    if not clean_lines:
+        raise ValueError("At least one non-empty account line is required.")
+    with self.transaction() as connection:
+        owner = connection.execute(
+            "SELECT id FROM users WHERE telegram_user_id=?", (owner_telegram_user_id,)
+        ).fetchone()
+        if owner is None:
+            raise ValueError("Product owner must start the bot first.")
+        cursor = connection.execute(
+            """
+            INSERT INTO inventory_batches (option_id, owner_user_id, price_cents, item_count)
+            VALUES (?, ?, ?, ?)
+            """,
+            (option_id, owner["id"], price_cents, len(clean_lines)),
+        )
+        batch_id = cursor.lastrowid
+        connection.executemany(
+            "INSERT INTO inventory_items (batch_id, secret_text) VALUES (?, ?)",
+            [(batch_id, line) for line in clean_lines],
+        )
+        return connection.execute(
+            "SELECT * FROM inventory_batches WHERE id=?", (batch_id,)
+        ).fetchone()
+
+def option(self, option_id: int) -> sqlite3.Row | None:
+    return self.connection.execute(
+        """
+        SELECT o.*, c.name category_name,
+          COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) available_stock
+        FROM options o
+        JOIN categories c ON c.id=o.category_id
+        LEFT JOIN inventory_batches b ON b.option_id=o.id
+        LEFT JOIN inventory_items i ON i.batch_id=b.id
+        WHERE o.id=? AND o.is_deleted=0 AND c.is_deleted=0
+        GROUP BY o.id
+        """,
+        (option_id,),
+    ).fetchone()
+
+def option_price_variants(self, option_id: int) -> list[sqlite3.Row]:
+    return self.connection.execute(
+        """
+        SELECT b.price_cents, COUNT(i.id) available_stock
+        FROM inventory_batches b
+        JOIN inventory_items i ON i.batch_id=b.id AND i.status='available'
+        WHERE b.option_id=?
+        GROUP BY b.price_cents
+        ORDER BY b.price_cents
+        """,
+        (option_id,),
+    ).fetchall()
+
+def update_variant_price(self, option_id: int, old_price_cents: int, new_price_cents: int) -> int:
+    if new_price_cents <= 0:
+        raise ValueError("Price must be positive.")
+    with self.transaction() as connection:
+        available = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM inventory_items i
+            JOIN inventory_batches b ON b.id=i.batch_id
+            WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
+            """,
+            (option_id, old_price_cents),
+        ).fetchone()["count"]
+        if available == 0:
+            raise ValueError("That price variant has no available stock.")
+        connection.execute(
+            """
+            UPDATE inventory_batches
+            SET price_cents=?
+            WHERE option_id=? AND price_cents=?
+              AND EXISTS (
+                SELECT 1 FROM inventory_items i
+                WHERE i.batch_id=inventory_batches.id AND i.status='available'
+              )
+            """,
+            (new_price_cents, option_id, old_price_cents),
+        )
+        return int(available)
+
+def remove_variant_stock(
+    self, option_id: int, price_cents: int, quantity: int | None = None
+) -> int:
+    if quantity is not None and quantity <= 0:
+        raise ValueError("Quantity must be positive.")
+    with self.transaction() as connection:
+        params: list[int] = [option_id, price_cents]
+        limit_sql = ""
+        if quantity is not None:
+            limit_sql = " LIMIT ?"
+            params.append(quantity)
+        rows = connection.execute(
+            f"""
+            SELECT i.id
+            FROM inventory_items i
+            JOIN inventory_batches b ON b.id=i.batch_id
+            WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
+            ORDER BY b.created_at, b.id, i.id
+            {limit_sql}
+            """,
+            params,
+        ).fetchall()
+        if quantity is not None and len(rows) < quantity:
+            raise ValueError(f"Available stock: {len(rows)}.")
+        ids = [row["id"] for row in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            connection.execute(
+                f"DELETE FROM inventory_items WHERE id IN ({placeholders})",
+                ids,
+            )
             connection.execute(
                 """
-                UPDATE inventory_batches
-                SET price_cents=?
-                WHERE option_id=? AND price_cents=?
-                  AND EXISTS (
-                    SELECT 1 FROM inventory_items i
-                    WHERE i.batch_id=inventory_batches.id AND i.status='available'
+                DELETE FROM inventory_batches
+                WHERE option_id=?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
                   )
                 """,
-                (new_price_cents, option_id, old_price_cents),
+                (option_id,),
             )
-            return int(available)
+        return len(ids)
 
-    def remove_variant_stock(
-        self, option_id: int, price_cents: int, quantity: int | None = None
-    ) -> int:
-        if quantity is not None and quantity <= 0:
-            raise ValueError("Quantity must be positive.")
-        with self.transaction() as connection:
-            params: list[int] = [option_id, price_cents]
-            limit_sql = ""
-            if quantity is not None:
-                limit_sql = " LIMIT ?"
-                params.append(quantity)
-            rows = connection.execute(
-                f"""
-                SELECT i.id
-                FROM inventory_items i
-                JOIN inventory_batches b ON b.id=i.batch_id
-                WHERE b.option_id=? AND b.price_cents=? AND i.status='available'
-                ORDER BY b.created_at, b.id, i.id
-                {limit_sql}
+def quote_purchase(
+    self,
+    option_id: int,
+    quantity: int,
+    admin_telegram_user_id: int,
+    price_cents: int | None = None,
+) -> dict[str, int]:
+    if quantity <= 0:
+        raise ValueError("Quantity must be positive.")
+    rows = self.connection.execute(
+        """
+        SELECT i.id, b.price_cents, b.owner_user_id
+        FROM inventory_items i
+        JOIN inventory_batches b ON b.id=i.batch_id
+        JOIN users owner ON owner.id=b.owner_user_id
+        WHERE b.option_id=? AND i.status='available'
+          AND (? IS NULL OR b.price_cents=?)
+        ORDER BY CASE WHEN owner.telegram_user_id=? THEN 0 ELSE 1 END,
+          b.created_at, b.id, i.id
+        LIMIT ?
+        """,
+        (option_id, price_cents, price_cents, admin_telegram_user_id, quantity),
+    ).fetchall()
+    if len(rows) < quantity:
+        option = self.option(option_id)
+        available = option["available_stock"] if option else 0
+        raise ValueError(f"Available stock: {available}.")
+    return {"quantity": quantity, "total_cents": sum(row["price_cents"] for row in rows)}
+
+def create_market_purchase(
+    self,
+    buyer_telegram_id: int,
+    option_id: int,
+    quantity: int,
+    request_key: str,
+    admin_telegram_user_id: int,
+    quoted_total_cents: int,
+    price_cents: int | None = None,
+    commission_percent: int | None = None,
+) -> tuple[sqlite3.Row, list[str]]:
+    with self.transaction() as connection:
+        duplicate = connection.execute(
+            "SELECT * FROM market_orders WHERE idempotency_key=?", (request_key,)
+        ).fetchone()
+        if duplicate is not None:
+            items = connection.execute(
+                """
+                SELECT i.secret_text FROM market_order_items oi
+                JOIN inventory_items i ON i.id=oi.inventory_item_id
+                WHERE oi.order_id=? ORDER BY oi.id
                 """,
-                params,
+                (duplicate["id"],),
             ).fetchall()
-            if quantity is not None and len(rows) < quantity:
-                raise ValueError(f"Available stock: {len(rows)}.")
-            ids = [row["id"] for row in rows]
-            if ids:
-                placeholders = ",".join("?" for _ in ids)
-                connection.execute(
-                    f"DELETE FROM inventory_items WHERE id IN ({placeholders})",
-                    ids,
-                )
-                connection.execute(
-                    """
-                    DELETE FROM inventory_batches
-                    WHERE option_id=?
-                      AND NOT EXISTS (
-                        SELECT 1 FROM inventory_items WHERE batch_id=inventory_batches.id
-                      )
-                    """,
-                    (option_id,),
-                )
-            return len(ids)
-
-    def quote_purchase(
-        self,
-        option_id: int,
-        quantity: int,
-        admin_telegram_user_id: int,
-        price_cents: int | None = None,
-    ) -> dict[str, int]:
-        if quantity <= 0:
-            raise ValueError("Quantity must be positive.")
-        rows = self.connection.execute(
+            return duplicate, [item["secret_text"] for item in items]
+        buyer = connection.execute(
+            "SELECT * FROM users WHERE telegram_user_id=?", (buyer_telegram_id,)
+        ).fetchone()
+        if buyer is None:
+            raise ValueError("Buyer not found.")
+        if commission_percent is None:
+            commission_percent = self.get_vendor_commission_percent()
+        if commission_percent < 0 or commission_percent > 100:
+            raise ValueError("Invalid vendor commission setting.")
+        admin_owner = connection.execute(
+            "SELECT * FROM users WHERE telegram_user_id=?", (admin_telegram_user_id,)
+        ).fetchone()
+        if admin_owner is None:
+            raise ValueError("Admin must start the bot before processing purchases.")
+        rows = connection.execute(
             """
-            SELECT i.id, b.price_cents, b.owner_user_id
+            SELECT i.id item_id, i.secret_text, b.price_cents, b.owner_user_id
             FROM inventory_items i
             JOIN inventory_batches b ON b.id=i.batch_id
             JOIN users owner ON owner.id=b.owner_user_id
@@ -711,249 +770,251 @@ class Database:
             (option_id, price_cents, price_cents, admin_telegram_user_id, quantity),
         ).fetchall()
         if len(rows) < quantity:
-            option = self.option(option_id)
-            available = option["available_stock"] if option else 0
-            raise ValueError(f"Available stock: {available}.")
-        return {"quantity": quantity, "total_cents": sum(row["price_cents"] for row in rows)}
-
-    def create_market_purchase(
-        self,
-        buyer_telegram_id: int,
-        option_id: int,
-        quantity: int,
-        request_key: str,
-        admin_telegram_user_id: int,
-        quoted_total_cents: int,
-        price_cents: int | None = None,
-        commission_percent: int | None = None,
-    ) -> tuple[sqlite3.Row, list[str]]:
-        with self.transaction() as connection:
-            duplicate = connection.execute(
-                "SELECT * FROM market_orders WHERE idempotency_key=?", (request_key,)
-            ).fetchone()
-            if duplicate is not None:
-                items = connection.execute(
-                    """
-                    SELECT i.secret_text FROM market_order_items oi
-                    JOIN inventory_items i ON i.id=oi.inventory_item_id
-                    WHERE oi.order_id=? ORDER BY oi.id
-                    """,
-                    (duplicate["id"],),
-                ).fetchall()
-                return duplicate, [item["secret_text"] for item in items]
-            buyer = connection.execute(
-                "SELECT * FROM users WHERE telegram_user_id=?", (buyer_telegram_id,)
-            ).fetchone()
-            if buyer is None:
-                raise ValueError("Buyer not found.")
-            if commission_percent is None:
-                commission_percent = self.get_vendor_commission_percent()
-            if commission_percent < 0 or commission_percent > 100:
-                raise ValueError("Invalid vendor commission setting.")
-            admin_owner = connection.execute(
-                "SELECT * FROM users WHERE telegram_user_id=?", (admin_telegram_user_id,)
-            ).fetchone()
-            if admin_owner is None:
-                raise ValueError("Admin must start the bot before processing purchases.")
-            rows = connection.execute(
-                """
-                SELECT i.id item_id, i.secret_text, b.price_cents, b.owner_user_id
-                FROM inventory_items i
-                JOIN inventory_batches b ON b.id=i.batch_id
-                JOIN users owner ON owner.id=b.owner_user_id
-                WHERE b.option_id=? AND i.status='available'
-                  AND (? IS NULL OR b.price_cents=?)
-                ORDER BY CASE WHEN owner.telegram_user_id=? THEN 0 ELSE 1 END,
-                  b.created_at, b.id, i.id
-                LIMIT ?
-                """,
-                (option_id, price_cents, price_cents, admin_telegram_user_id, quantity),
-            ).fetchall()
-            if len(rows) < quantity:
-                raise ValueError("Stock changed. Please review the available stock.")
-            total = sum(row["price_cents"] for row in rows)
-            if total != quoted_total_cents:
-                raise ValueError("Price or stock changed. Please review the purchase again.")
-            if buyer["balance_cents"] < total:
-                raise ValueError(
-                    f"Insufficient balance. Required {total} cents, current {buyer['balance_cents']} cents."
-                )
-            order_cursor = connection.execute(
-                """
-                INSERT INTO market_orders (buyer_user_id, option_id, quantity, total_cents, idempotency_key)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (buyer["id"], option_id, quantity, total, request_key),
+            raise ValueError("Stock changed. Please review the available stock.")
+        total = sum(row["price_cents"] for row in rows)
+        if total != quoted_total_cents:
+            raise ValueError("Price or stock changed. Please review the purchase again.")
+        if buyer["balance_cents"] < total:
+            raise ValueError(
+                f"Insufficient balance. Required {total} cents, current {buyer['balance_cents']} cents."
             )
-            order_id = order_cursor.lastrowid
-            owners: dict[int, int] = {}
-            for row in rows:
-                changed = connection.execute(
-                    "UPDATE inventory_items SET status='sold', order_id=?, sold_at=CURRENT_TIMESTAMP WHERE id=? AND status='available'",
-                    (order_id, row["item_id"]),
-                )
-                if changed.rowcount != 1:
-                    raise ValueError("Stock changed. Please try again.")
-                connection.execute(
-                    """
-                    INSERT INTO market_order_items (order_id, inventory_item_id, owner_user_id, price_cents)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (order_id, row["item_id"], row["owner_user_id"], row["price_cents"]),
-                )
-                owners[row["owner_user_id"]] = owners.get(row["owner_user_id"], 0) + row["price_cents"]
-            self.ledger_entry(
-                connection,
-                user_id=buyer["id"],
-                amount_cents=-total,
-                entry_type="purchase",
-                reference_type="market_order",
-                reference_id=order_id,
-                idempotency_key=f"market-purchase-buyer:{request_key}",
-                note=f"Option #{option_id} x {quantity}",
-            )
-            for owner_id, amount in owners.items():
-                vendor_amount = amount
-                fee_amount = 0
-                if owner_id != admin_owner["id"]:
-                    vendor_amount = amount * commission_percent // 100
-                    fee_amount = amount - vendor_amount
-                self.ledger_entry(
-                    connection,
-                    user_id=owner_id,
-                    amount_cents=vendor_amount,
-                    entry_type="owner_sale",
-                    reference_type="market_order",
-                    reference_id=order_id,
-                    idempotency_key=f"market-purchase-owner:{request_key}:{owner_id}",
-                    note=f"Option #{option_id} x {vendor_amount} cents after {commission_percent}% commission",
-                )
-                if fee_amount:
-                    self.ledger_entry(
-                        connection,
-                        user_id=admin_owner["id"],
-                        amount_cents=fee_amount,
-                        entry_type="platform_fee",
-                        reference_type="market_order",
-                        reference_id=order_id,
-                        idempotency_key=f"market-purchase-fee:{request_key}:{owner_id}",
-                        note=f"Option #{option_id} platform fee",
-                    )
-            order = connection.execute(
-                "SELECT * FROM market_orders WHERE id=?", (order_id,)
-            ).fetchone()
-            return order, [row["secret_text"] for row in rows]
-
-    def market_order_vendor_payouts(
-        self, order_id: int, admin_telegram_user_id: int, commission_percent: int
-    ) -> list[dict[str, int | str | None]]:
-        rows = self.connection.execute(
+        order_cursor = connection.execute(
             """
-            SELECT u.telegram_user_id, u.username, u.balance_cents,
-              op.name option_name, SUM(oi.price_cents) amount_cents
-            FROM market_order_items oi
-            JOIN users u ON u.id=oi.owner_user_id
-            JOIN market_orders mo ON mo.id=oi.order_id
-            JOIN options op ON op.id=mo.option_id
-            WHERE oi.order_id=? AND u.telegram_user_id<>?
-            GROUP BY u.id, op.id
-            ORDER BY u.id
+            INSERT INTO market_orders (buyer_user_id, option_id, quantity, total_cents, idempotency_key)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (order_id, admin_telegram_user_id),
-        ).fetchall()
-        return [
-            {
-                "telegram_user_id": row["telegram_user_id"],
-                "username": row["username"],
-                "balance_cents": row["balance_cents"],
-                "option_name": row["option_name"],
-                "amount_cents": row["amount_cents"] * commission_percent // 100,
-            }
-            for row in rows
-        ]
-
-    def inventory_batch_context(self, batch_id: int) -> sqlite3.Row:
-        row = self.connection.execute(
-            """
-            SELECT b.item_count, b.price_cents, o.name option_name, c.name category_name
-            FROM inventory_batches b
-            JOIN options o ON o.id=b.option_id
-            JOIN categories c ON c.id=o.category_id
-            WHERE b.id=?
-            """,
-            (batch_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Inventory batch not found.")
-        return row
-
-    def create_withdrawal(
-        self, telegram_user_id: int, method_key: str, amount_cents: int, payout_details: str
-    ) -> sqlite3.Row:
-        with self.transaction() as connection:
-            user = connection.execute(
-                "SELECT * FROM users WHERE telegram_user_id=?", (telegram_user_id,)
-            ).fetchone()
-            if user is None:
-                raise ValueError("User not found.")
-            if amount_cents <= 0:
-                raise ValueError("Amount must be positive.")
-            if user["balance_cents"] < amount_cents:
-                raise ValueError(
-                    f"Insufficient balance. Current balance: {user['balance_cents']} cents."
-                )
-            cursor = connection.execute(
-                """
-                INSERT INTO withdrawals (user_id, method_key, amount_cents, payout_details)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user["id"], method_key, amount_cents, payout_details),
-            )
-            withdrawal_id = cursor.lastrowid
-            self.ledger_entry(
-                connection,
-                user_id=user["id"],
-                amount_cents=-amount_cents,
-                entry_type="withdrawal_reserve",
-                reference_type="withdrawal",
-                reference_id=withdrawal_id,
-                idempotency_key=f"withdrawal-reserve:{withdrawal_id}",
-                note="Amount reserved until admin approval or rejection.",
-            )
-            connection.execute(
-                "UPDATE users SET reserved_cents=reserved_cents+? WHERE id=?",
-                (amount_cents, user["id"]),
-            )
-            return connection.execute("SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)).fetchone()
-
-    def process_withdrawal(self, withdrawal_id: int, approve: bool) -> sqlite3.Row:
-        with self.transaction() as connection:
-            withdrawal = connection.execute(
-                "SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)
-            ).fetchone()
-            if withdrawal is None:
-                raise ValueError("Withdrawal not found.")
-            if withdrawal["status"] != "pending":
-                raise ValueError("This withdrawal has already been processed.")
+            (buyer["id"], option_id, quantity, total, request_key),
+        )
+        order_id = order_cursor.lastrowid
+        owners: dict[int, int] = {}
+        for row in rows:
             changed = connection.execute(
-                "UPDATE users SET reserved_cents=reserved_cents-? WHERE id=? AND reserved_cents>=?",
-                (withdrawal["amount_cents"], withdrawal["user_id"], withdrawal["amount_cents"]),
+                "UPDATE inventory_items SET status='sold', order_id=?, sold_at=CURRENT_TIMESTAMP WHERE id=? AND status='available'",
+                (order_id, row["item_id"]),
             )
             if changed.rowcount != 1:
-                raise ValueError("Reserved balance is inconsistent.")
-            if not approve:
+                raise ValueError("Stock changed. Please try again.")
+            connection.execute(
+                """
+                INSERT INTO market_order_items (order_id, inventory_item_id, owner_user_id, price_cents)
+                VALUES (?, ?, ?, ?)
+                """,
+                (order_id, row["item_id"], row["owner_user_id"], row["price_cents"]),
+            )
+            owners[row["owner_user_id"]] = owners.get(row["owner_user_id"], 0) + row["price_cents"]
+        self.ledger_entry(
+            connection,
+            user_id=buyer["id"],
+            amount_cents=-total,
+            entry_type="purchase",
+            reference_type="market_order",
+            reference_id=order_id,
+            idempotency_key=f"market-purchase-buyer:{request_key}",
+            note=f"Option #{option_id} x {quantity}",
+        )
+        for owner_id, amount in owners.items():
+            vendor_amount = amount
+            fee_amount = 0
+            if owner_id != admin_owner["id"]:
+                vendor_amount = amount * commission_percent // 100
+                fee_amount = amount - vendor_amount
+            self.ledger_entry(
+                connection,
+                user_id=owner_id,
+                amount_cents=vendor_amount,
+                entry_type="owner_sale",
+                reference_type="market_order",
+                reference_id=order_id,
+                idempotency_key=f"market-purchase-owner:{request_key}:{owner_id}",
+                note=f"Option #{option_id} x {vendor_amount} cents after {commission_percent}% commission",
+            )
+            if fee_amount:
                 self.ledger_entry(
                     connection,
-                    user_id=withdrawal["user_id"],
-                    amount_cents=withdrawal["amount_cents"],
-                    entry_type="withdrawal_refund",
-                    reference_type="withdrawal",
-                    reference_id=withdrawal_id,
-                    idempotency_key=f"withdrawal-refund:{withdrawal_id}",
-                    note="Withdrawal rejected; reserved amount returned.",
+                    user_id=admin_owner["id"],
+                    amount_cents=fee_amount,
+                    entry_type="platform_fee",
+                    reference_type="market_order",
+                    reference_id=order_id,
+                    idempotency_key=f"market-purchase-fee:{request_key}:{owner_id}",
+                    note=f"Option #{option_id} platform fee",
                 )
-            connection.execute(
-                "UPDATE withdrawals SET status=?, processed_at=CURRENT_TIMESTAMP WHERE id=?",
-                ("approved" if approve else "rejected", withdrawal_id),
+        order = connection.execute(
+            "SELECT * FROM market_orders WHERE id=?", (order_id,)
+        ).fetchone()
+        return order, [row["secret_text"] for row in rows]
+
+def market_order_vendor_payouts(
+    self, order_id: int, admin_telegram_user_id: int, commission_percent: int
+) -> list[dict[str, int | str | None]]:
+    rows = self.connection.execute(
+        """
+        SELECT u.telegram_user_id, u.username, u.balance_cents,
+          op.name option_name, SUM(oi.price_cents) amount_cents
+        FROM market_order_items oi
+        JOIN users u ON u.id=oi.owner_user_id
+        JOIN market_orders mo ON mo.id=oi.order_id
+        JOIN options op ON op.id=mo.option_id
+        WHERE oi.order_id=? AND u.telegram_user_id<>?
+        GROUP BY u.id, op.id
+        ORDER BY u.id
+        """,
+        (order_id, admin_telegram_user_id),
+    ).fetchall()
+    return [
+        {
+            "telegram_user_id": row["telegram_user_id"],
+            "username": row["username"],
+            "balance_cents": row["balance_cents"],
+            "option_name": row["option_name"],
+            "amount_cents": row["amount_cents"] * commission_percent // 100,
+        }
+        for row in rows
+    ]
+
+def inventory_batch_context(self, batch_id: int) -> sqlite3.Row:
+    row = self.connection.execute(
+        """
+        SELECT b.item_count, b.price_cents, o.name option_name, c.name category_name
+        FROM inventory_batches b
+        JOIN options o ON o.id=b.option_id
+        JOIN categories c ON c.id=o.category_id
+        WHERE b.id=?
+        """,
+        (batch_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Inventory batch not found.")
+    return row
+
+def create_withdrawal(
+    self, telegram_user_id: int, method_key: str, amount_cents: int, payout_details: str
+) -> sqlite3.Row:
+    with self.transaction() as connection:
+        user = connection.execute(
+            "SELECT * FROM users WHERE telegram_user_id=?", (telegram_user_id,)
+        ).fetchone()
+        if user is None:
+            raise ValueError("User not found.")
+        if amount_cents <= 0:
+            raise ValueError("Amount must be positive.")
+        if user["balance_cents"] < amount_cents:
+            raise ValueError(
+                f"Insufficient balance. Current balance: {user['balance_cents']} cents."
             )
-            return connection.execute("SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)).fetchone()
+        cursor = connection.execute(
+            """
+            INSERT INTO withdrawals (user_id, method_key, amount_cents, payout_details)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user["id"], method_key, amount_cents, payout_details),
+        )
+        withdrawal_id = cursor.lastrowid
+        self.ledger_entry(
+            connection,
+            user_id=user["id"],
+            amount_cents=-amount_cents,
+            entry_type="withdrawal_reserve",
+            reference_type="withdrawal",
+            reference_id=withdrawal_id,
+            idempotency_key=f"withdrawal-reserve:{withdrawal_id}",
+            note="Amount reserved until admin approval or rejection.",
+        )
+        connection.execute(
+            "UPDATE users SET reserved_cents=reserved_cents+? WHERE id=?",
+            (amount_cents, user["id"]),
+        )
+        return connection.execute("SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)).fetchone()
+
+def process_withdrawal(self, withdrawal_id: int, approve: bool) -> sqlite3.Row:
+    with self.transaction() as connection:
+        withdrawal = connection.execute(
+            "SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)
+        ).fetchone()
+        if withdrawal is None:
+            raise ValueError("Withdrawal not found.")
+        if withdrawal["status"] != "pending":
+            raise ValueError("This withdrawal has already been processed.")
+        changed = connection.execute(
+            "UPDATE users SET reserved_cents=reserved_cents-? WHERE id=? AND reserved_cents>=?",
+            (withdrawal["amount_cents"], withdrawal["user_id"], withdrawal["amount_cents"]),
+        )
+        if changed.rowcount != 1:
+            raise ValueError("Reserved balance is inconsistent.")
+        if not approve:
+            self.ledger_entry(
+                connection,
+                user_id=withdrawal["user_id"],
+                amount_cents=withdrawal["amount_cents"],
+                entry_type="withdrawal_refund",
+                reference_type="withdrawal",
+                reference_id=withdrawal_id,
+                idempotency_key=f"withdrawal-refund:{withdrawal_id}",
+                note="Withdrawal rejected; reserved amount returned.",
+            )
+        connection.execute(
+            "UPDATE withdrawals SET status=?, processed_at=CURRENT_TIMESTAMP WHERE id=?",
+            ("approved" if approve else "rejected", withdrawal_id),
+        )
+        return connection.execute("SELECT * FROM withdrawals WHERE id=?", (withdrawal_id,)).fetchone()
+
+# ============================================================
+# NEW METHODS — for Profile, Order History, Transaction History
+# ============================================================
+
+def user_stats(self, telegram_user_id: int) -> dict[str, int | str | None]:
+    """Return aggregated stats for a user's profile page."""
+    user = self.get_user(telegram_user_id)
+    order_row = self.connection.execute(
+        """
+        SELECT COUNT(*) AS total_orders,
+               COALESCE(SUM(quantity), 0) AS total_items,
+               COALESCE(SUM(total_cents), 0) AS total_spent_cents
+        FROM market_orders
+        WHERE buyer_user_id=? AND status='completed'
+        """,
+        (user["id"],),
+    ).fetchone()
+    return {
+        "telegram_user_id": user["telegram_user_id"],
+"username": user["username"],
+        "first_name": user["first_name"],
+    "language": user["language"],
+    "balance_cents": user["balance_cents"],
+    "reserved_cents": user["reserved_cents"],
+    "created_at": user["created_at"],
+    "total_orders": int(order_row["total_orders"] or 0),
+    "total_items": int(order_row["total_items"] or 0),
+    "total_spent_cents": int(order_row["total_spent_cents"] or 0),
+}
+
+def user_orders(self, telegram_user_id: int, limit: int = 10) -> list[sqlite3.Row]:
+    """Return the most recent orders placed by a user."""
+    user = self.get_user(telegram_user_id)
+    return self.connection.execute(
+        """
+        SELECT mo.id AS order_id, mo.quantity, mo.total_cents, mo.status,
+               mo.created_at, o.name AS option_name, c.name AS category_name
+        FROM market_orders mo
+        JOIN options o ON o.id=mo.option_id
+        JOIN categories c ON c.id=o.category_id
+        WHERE mo.buyer_user_id=?
+        ORDER BY mo.id DESC
+        LIMIT ?
+        """,
+        (user["id"], limit),
+    ).fetchall()
+
+def user_transactions(self, telegram_user_id: int, limit: int = 10) -> list[sqlite3.Row]:
+    """Return the most recent ledger entries for a user."""
+    user = self.get_user(telegram_user_id)
+    return self.connection.execute(
+        """
+        SELECT amount_cents, balance_after_cents, entry_type, note, created_at
+        FROM ledger
+        WHERE user_id=?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (user["id"], limit),
+    ).fetchall()
