@@ -213,269 +213,269 @@ class MarketplaceBot:
             self.show_support(chat_id)
         elif action == "admin":
             self.show_admin_menu(chat_id, chat_id)
+            
+def handle_callback(self, callback: dict[str, Any]) -> None:
+    user = callback["from"]
+    message = callback["message"]
+    chat_id = int(message["chat"]["id"])
+    data = callback.get("data", "")
+    self.active_callback_messages[chat_id] = int(message["message_id"])
+    self.db.ensure_user(user["id"], user.get("username"), user.get("first_name", ""))
+    self.api.answer_callback(callback["id"])
+    if data in ("cancel", "back"):
+        self.cancel(chat_id)
+    elif data == "menu":
+        self.db.clear_state(chat_id)
+        self.send_main_menu(chat_id)
+    elif data == "balance":
+        self.show_balance(chat_id)
+    elif data == "market":
+        self.show_categories(chat_id)
+    elif data == "profile":
+        self.show_profile(chat_id)
+    elif data == "my_orders":
+        self.show_my_orders(chat_id)
+    elif data == "history":
+        self.show_my_transactions(chat_id)
+    elif data.startswith("category:"):
+        self.show_options(chat_id, int(data.split(":")[1]))
+    elif data.startswith("option:"):
+        self.show_option(chat_id, int(data.split(":")[1]))
+    elif data.startswith("variant:"):
+        _, option_id, price_cents = data.split(":")
+        self.start_purchase(chat_id, int(option_id), int(price_cents))
+    elif data.startswith("buy:"):
+        self.start_purchase(chat_id, int(data.split(":")[1]))
+    elif data == "deposit":
+        self.start_deposit(chat_id)
+    elif data.startswith("deposit_method:"):
+        self.select_deposit_method(chat_id, data.split(":", 1)[1])
+    elif data == "withdraw":
+        self.start_withdrawal(chat_id)
+    elif data.startswith("withdraw_method:"):
+        self.select_withdrawal_method(chat_id, data.split(":", 1)[1])
+    elif data in {
+        "deposit_confirm",
+        "withdraw_confirm",
+        "purchase_confirm",
+        "stock_confirm",
+        "broadcast_confirm",
+        "balance_confirm",
+    }:
+        self.confirm_from_callback(chat_id, data)
+    elif data == "support":
+        self.show_support(chat_id)
+    elif data == "admin":
+        self.show_admin_menu(chat_id, user["id"])
+    elif data == "admin:deposits":
+        self.show_pending_deposits(chat_id, user["id"])
+    elif data.startswith("deposit:approve:") or data.startswith("deposit:reject:"):
+        self.process_deposit(chat_id, user["id"], data)
+    elif data == "admin:withdrawals":
+        self.show_pending_withdrawals(chat_id, user["id"])
+    elif data.startswith("withdrawal:approve:") or data.startswith("withdrawal:reject:"):
+        self.process_withdrawal(chat_id, user["id"], data)
+    elif data == "admin:products":
+        self.admin_products(chat_id, user["id"])
+    elif data == "admin:new_category":
+        self.start_new_category(chat_id, user["id"])
+    elif data.startswith("admin:category:rename:"):
+        self.start_category_rename(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:category:delete_confirm:"):
+        self.delete_category(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:category:delete:"):
+        self.confirm_category_delete(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:category:"):
+        self.admin_category(chat_id, user["id"], int(data.split(":")[2]))
+    elif data.startswith("admin:new_option:"):
+        self.start_new_option(chat_id, user["id"], int(data.split(":")[2]))
+    elif data.startswith("admin:option:rename:"):
+        self.start_option_rename(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:option:delete_confirm:"):
+        self.delete_option(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:option:delete:"):
+        self.confirm_option_delete(chat_id, user["id"], int(data.split(":")[3]))
+    elif data.startswith("admin:option:"):
+        self.admin_option(chat_id, user["id"], int(data.split(":")[2]))
+    elif data.startswith("admin:add_stock:"):
+        self.start_stock_upload(chat_id, user["id"], int(data.split(":")[2]))
+    elif data.startswith("admin:variant:edit:"):
+        _, _, _, option_id, price_cents = data.split(":")
+        self.start_variant_price_edit(chat_id, user["id"], int(option_id), int(price_cents))
+    elif data.startswith("admin:variant:remove:"):
+        _, _, _, option_id, price_cents = data.split(":")
+        self.start_variant_stock_remove(chat_id, user["id"], int(option_id), int(price_cents))
+    elif data.startswith("admin:variant:clear_confirm:"):
+        _, _, _, option_id, price_cents = data.split(":")
+        self.clear_variant_stock(chat_id, user["id"], int(option_id), int(price_cents))
+    elif data.startswith("admin:variant:clear:"):
+        _, _, _, option_id, price_cents = data.split(":")
+        self.confirm_variant_clear(chat_id, user["id"], int(option_id), int(price_cents))
+    elif data.startswith("admin:variant:"):
+        _, _, option_id, price_cents = data.split(":")
+        self.admin_price_variant(chat_id, user["id"], int(option_id), int(price_cents))
+    elif data.startswith("stock_owner:"):
+        self.select_stock_owner(chat_id, user["id"], data.split(":", 1)[1])
+    elif data == "admin:payment":
+        self.show_payment_setup(chat_id, user["id"])
+    elif data == "admin:commission":
+        self.show_commission_setup(chat_id, user["id"])
+    elif data == "commission:edit":
+        self.start_commission_setup(chat_id, user["id"])
+    elif data.startswith("payment:"):
+        self.start_payment_setup(chat_id, user["id"], data.split(":")[1])
+    elif data == "admin:broadcast":
+        self.start_broadcast(chat_id, user["id"])
+    elif data == "admin:orders":
+        self.show_orders(chat_id, user["id"])
+    elif data == "admin:sales":
+        self.show_sales(chat_id, user["id"])
+    elif data == "admin:balance":
+        self.start_balance_adjustment(chat_id, user["id"])
+    elif data.startswith("balance_mode:"):
+        self.select_balance_mode(chat_id, user["id"], data)
 
-    def handle_callback(self, callback: dict[str, Any]) -> None:
-        user = callback["from"]
-        message = callback["message"]
-        chat_id = int(message["chat"]["id"])
-        data = callback.get("data", "")
-        self.active_callback_messages[chat_id] = int(message["message_id"])
-        self.db.ensure_user(user["id"], user.get("username"), user.get("first_name", ""))
-        self.api.answer_callback(callback["id"])
-        if data in ("cancel", "back"):
-            self.cancel(chat_id)
-        elif data == "menu":
-            self.db.clear_state(chat_id)
-            self.send_main_menu(chat_id)
-        elif data == "balance":
-            self.show_balance(chat_id)
-        elif data == "market":
-            self.show_categories(chat_id)
-        elif data == "profile":
-            self.show_profile(chat_id)
-        elif data == "my_orders":
-            self.show_my_orders(chat_id)
-        elif data == "history":
-            self.show_my_transactions(chat_id)
-        elif data.startswith("category:"):
-            self.show_options(chat_id, int(data.split(":")[1]))
-        elif data.startswith("option:"):
-            self.show_option(chat_id, int(data.split(":")[1]))
-        elif data.startswith("variant:"):
-            _, option_id, price_cents = data.split(":")
-            self.start_purchase(chat_id, int(option_id), int(price_cents))
-        elif data.startswith("buy:"):
-            self.start_purchase(chat_id, int(data.split(":")[1]))
-        elif data == "deposit":
-            self.start_deposit(chat_id)
-        elif data.startswith("deposit_method:"):
-            self.select_deposit_method(chat_id, data.split(":", 1)[1])
-        elif data == "withdraw":
-            self.start_withdrawal(chat_id)
-        elif data.startswith("withdraw_method:"):
-            self.select_withdrawal_method(chat_id, data.split(":", 1)[1])
-        elif data in {
-            "deposit_confirm",
-            "withdraw_confirm",
-            "purchase_confirm",
-            "stock_confirm",
-            "broadcast_confirm",
-            "balance_confirm",
-        }:
-            self.confirm_from_callback(chat_id, data)
-        elif data == "support":
-            self.show_support(chat_id)
-        elif data == "admin":
-            self.show_admin_menu(chat_id, user["id"])
-        elif data == "admin:deposits":
-            self.show_pending_deposits(chat_id, user["id"])
-        elif data.startswith("deposit:approve:") or data.startswith("deposit:reject:"):
-            self.process_deposit(chat_id, user["id"], data)
-        elif data == "admin:withdrawals":
-            self.show_pending_withdrawals(chat_id, user["id"])
-        elif data.startswith("withdrawal:approve:") or data.startswith("withdrawal:reject:"):
-            self.process_withdrawal(chat_id, user["id"], data)
-        elif data == "admin:products":
-            self.admin_products(chat_id, user["id"])
-        elif data == "admin:new_category":
-            self.start_new_category(chat_id, user["id"])
-        elif data.startswith("admin:category:rename:"):
-            self.start_category_rename(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:category:delete_confirm:"):
-            self.delete_category(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:category:delete:"):
-            self.confirm_category_delete(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:category:"):
-            self.admin_category(chat_id, user["id"], int(data.split(":")[2]))
-        elif data.startswith("admin:new_option:"):
-            self.start_new_option(chat_id, user["id"], int(data.split(":")[2]))
-        elif data.startswith("admin:option:rename:"):
-            self.start_option_rename(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:option:delete_confirm:"):
-            self.delete_option(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:option:delete:"):
-            self.confirm_option_delete(chat_id, user["id"], int(data.split(":")[3]))
-        elif data.startswith("admin:option:"):
-            self.admin_option(chat_id, user["id"], int(data.split(":")[2]))
-        elif data.startswith("admin:add_stock:"):
-            self.start_stock_upload(chat_id, user["id"], int(data.split(":")[2]))
-        elif data.startswith("admin:variant:edit:"):
-            _, _, _, option_id, price_cents = data.split(":")
-            self.start_variant_price_edit(chat_id, user["id"], int(option_id), int(price_cents))
-        elif data.startswith("admin:variant:remove:"):
-            _, _, _, option_id, price_cents = data.split(":")
-            self.start_variant_stock_remove(chat_id, user["id"], int(option_id), int(price_cents))
-        elif data.startswith("admin:variant:clear_confirm:"):
-            _, _, _, option_id, price_cents = data.split(":")
-            self.clear_variant_stock(chat_id, user["id"], int(option_id), int(price_cents))
-        elif data.startswith("admin:variant:clear:"):
-            _, _, _, option_id, price_cents = data.split(":")
-            self.confirm_variant_clear(chat_id, user["id"], int(option_id), int(price_cents))
-        elif data.startswith("admin:variant:"):
-            _, _, option_id, price_cents = data.split(":")
-            self.admin_price_variant(chat_id, user["id"], int(option_id), int(price_cents))
-        elif data.startswith("stock_owner:"):
-            self.select_stock_owner(chat_id, user["id"], data.split(":", 1)[1])
-        elif data == "admin:payment":
-            self.show_payment_setup(chat_id, user["id"])
-        elif data == "admin:commission":
-            self.show_commission_setup(chat_id, user["id"])
-        elif data == "commission:edit":
-            self.start_commission_setup(chat_id, user["id"])
-        elif data.startswith("payment:"):
-            self.start_payment_setup(chat_id, user["id"], data.split(":")[1])
-        elif data == "admin:broadcast":
-            self.start_broadcast(chat_id, user["id"])
-        elif data == "admin:orders":
-            self.show_orders(chat_id, user["id"])
-        elif data == "admin:sales":
-            self.show_sales(chat_id, user["id"])
-        elif data == "admin:balance":
-            self.start_balance_adjustment(chat_id, user["id"])
-        elif data.startswith("balance_mode:"):
-            self.select_balance_mode(chat_id, user["id"], data)
+def main_reply_keyboard(self, chat_id: int) -> dict[str, Any]:
+    english = self.db.get_user(chat_id)["language"] == "en"
+    rows = [
+        [
+            "💳 Balance" if english else "💳 ব্যালেন্স",
+            "🛍 Marketplace" if english else "🛍 মার্কেটপ্লেস",
+        ],
+        [
+            "➕ Deposit" if english else "➕ ডিপোজিট",
+            "↗️ Withdrawal" if english else "↗️ উত্তোলন",
+        ],
+        [
+            "👤 Profile" if english else "👤 প্রোফাইল",
+            "📜 My Orders" if english else "📜 আমার অর্ডার",
+        ],
+        [
+            "💰 History" if english else "💰 হিস্টোরি",
+            "🆘 Support" if english else "🆘 সাপোর্ট",
+        ],
+    ]
+    if chat_id == self.settings.admin_user_id:
+        rows.append(["⚙️ Admin Panel" if english else "⚙️ অ্যাডমিন প্যানেল"])
+    return reply_keyboard(rows)
 
-    def main_reply_keyboard(self, chat_id: int) -> dict[str, Any]:
-        english = self.db.get_user(chat_id)["language"] == "en"
-        rows = [
-            [
-                "💳 Balance" if english else "💳 ব্যালেন্স",
-                "🛍 Marketplace" if english else "🛍 মার্কেটপ্লেস",
-            ],
-            [
-                "➕ Deposit" if english else "➕ ডিপোজিট",
-                "↗️ Withdrawal" if english else "↗️ উত্তোলন",
-            ],
-            [
-                "👤 Profile" if english else "👤 প্রোফাইল",
-                "📜 My Orders" if english else "📜 আমার অর্ডার",
-            ],
-            [
-                "💰 History" if english else "💰 হিস্টোরি",
-                "🆘 Support" if english else "🆘 সাপোর্ট",
-            ],
-        ]
-        if chat_id == self.settings.admin_user_id:
-            rows.append(["⚙️ Admin Panel" if english else "⚙️ অ্যাডমিন প্যানেল"])
-        return reply_keyboard(rows)
+def send_welcome(self, chat_id: int) -> None:
+    message = self.t(
+        chat_id,
+        "<b>স্বাগতম Telegram Marketplace-এ</b>\n\n"
+        "এখানে আপনি নিরাপদে account products দেখতে, balance যোগ করতে, "
+        "কেনাকাটা করতে এবং withdrawal request দিতে পারবেন।\n\n"
+        "শুরু করতে নিচের menu ব্যবহার করুন। ভাষা বদলাতে /language লিখুন।",
+        "<b>Welcome to Telegram Marketplace</b>\n\n"
+        "Browse account products, add balance, purchase stock, and request withdrawals securely.\n\n"
+        "Use the menu below to get started. Use /language to switch language.",
+    )
+    self.send(chat_id, message, self.main_reply_keyboard(chat_id), parse_mode="HTML")
 
-    def send_welcome(self, chat_id: int) -> None:
-        message = self.t(
-            chat_id,
-            "<b>স্বাগতম Telegram Marketplace-এ</b>\n\n"
-            "এখানে আপনি নিরাপদে account products দেখতে, balance যোগ করতে, "
-            "কেনাকাটা করতে এবং withdrawal request দিতে পারবেন।\n\n"
-            "শুরু করতে নিচের menu ব্যবহার করুন। ভাষা বদলাতে /language লিখুন।",
-            "<b>Welcome to Telegram Marketplace</b>\n\n"
-            "Browse account products, add balance, purchase stock, and request withdrawals securely.\n\n"
-            "Use the menu below to get started. Use /language to switch language.",
-        )
-        self.send(chat_id, message, self.main_reply_keyboard(chat_id), parse_mode="HTML")
-
-    def send_main_menu(self, chat_id: int) -> None:
-        self.send(
-            chat_id,
-            self.t(chat_id, "একটি option নির্বাচন করুন।", "Choose an option."),
-            self.main_reply_keyboard(chat_id),
-        )
-
-    def start_language(self, chat_id: int) -> None:
-        self.send(
-            chat_id,
-            "ভাষা নির্বাচন করুন / Choose your language:",
-            reply_keyboard([["বাংলা", "English"]]),
-        )
-
-    def set_language(self, chat_id: int, selection: str) -> None:
-        language = "bn" if selection == "বাংলা" else "en"
-        self.db.set_language(chat_id, language)
-        self.send(
-            chat_id,
-            "ভাষা বাংলা করা হয়েছে।" if language == "bn" else "Language changed to English.",
-            self.main_reply_keyboard(chat_id),
-        )
-
-    def handle_getid(self, chat_id: int, text: str) -> None:
-        if chat_id != self.settings.admin_user_id:
-            self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
-            return
-        parts = text.split(maxsplit=1)
-        if len(parts) != 2:
-            self.send(chat_id, "Usage: /getid @username", self.main_reply_keyboard(chat_id))
-            return
-        user = self.db.find_user(parts[1])
-        if not user:
-            self.send(chat_id, "User not found. The user must send /start first.", self.main_reply_keyboard(chat_id))
-            return
-        self.send(
-            chat_id,
-            f"Username: @{user['username'] or '-'}\nTelegram UID: {user['telegram_user_id']}",
-            self.main_reply_keyboard(chat_id),
-        )
-
-    def show_balance(self, chat_id: int) -> None:
-        user = self.db.get_user(chat_id)
-        self.send(
-            chat_id,
-            "💰 <b>Balance</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"💳 Available: {self.amount(chat_id, user['balance_cents'])}\n"
-            f"🔒 Reserved withdrawals: {self.amount(chat_id, user['reserved_cents'])}",
-            inline_keyboard(
-                [
-                    [
-                        ("🔵 👤 Profile", "profile"),
-                        ("🔵 💰 History", "history"),
-                    ],
-                    [("🔵 🏠 Main Menu", "menu")],
-                ]
-            ),
-            parse_mode="HTML",
-        )
-
-    def show_categories(self, chat_id: int) -> None:
-        categories = self.db.connection.execute(
-            """
-            SELECT c.id, c.name,
-              COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
-            FROM categories c
-            LEFT JOIN options o ON o.category_id=c.id AND o.is_deleted=0
-            LEFT JOIN inventory_batches b ON b.option_id=o.id
-            LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE c.is_deleted=0
-            GROUP BY c.id ORDER BY c.name
-            """
-        ).fetchall()
-        if not categories:
-            self.send(chat_id, "📦 Marketplace is currently empty.", self.main_reply_keyboard(chat_id))
-            return
-        rows = [[(f"🔵 {row['name']} — Stock: {row['stock']}", f"category:{row['id']}")] for row in categories]
-        rows.append([("🔵 🏠 Main Menu", "menu")])
-        self.send(chat_id, "🏷️ <b>Categories</b>\n━━━━━━━━━━━━━━━━━━\nChoose a category:", inline_keyboard(rows), parse_mode="HTML")
-
-    def show_options(self, chat_id: int, category_id: int) -> None:
-        category = self.db.connection.execute(
-            "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
-        ).fetchone()
-        if not category:
-            self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
-            return
-        options = self.db.connection.execute(
-            """
-            SELECT o.id, o.name,
-              COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
-            FROM options o
-            LEFT JOIN inventory_batches b ON b.option_id=o.id
-            LEFT JOIN inventory_items i ON i.batch_id=b.id
-            WHERE o.category_id=? AND o.is_deleted=0 GROUP BY o.id ORDER BY o.name
-            """,
-                (category_id,),
-).fetchall()
-if not options:
+def send_main_menu(self, chat_id: int) -> None:
     self.send(
         chat_id,
-        "📦 Stock: 0\nCurrently unavailable.",
-                    inline_keyboard(
+        self.t(chat_id, "একটি option নির্বাচন করুন।", "Choose an option."),
+        self.main_reply_keyboard(chat_id),
+    )
+
+def start_language(self, chat_id: int) -> None:
+    self.send(
+        chat_id,
+        "ভাষা নির্বাচন করুন / Choose your language:",
+        reply_keyboard([["বাংলা", "English"]]),
+    )
+
+def set_language(self, chat_id: int, selection: str) -> None:
+    language = "bn" if selection == "বাংলা" else "en"
+    self.db.set_language(chat_id, language)
+    self.send(
+        chat_id,
+        "ভাষা বাংলা করা হয়েছে।" if language == "bn" else "Language changed to English.",
+        self.main_reply_keyboard(chat_id),
+    )
+
+def handle_getid(self, chat_id: int, text: str) -> None:
+    if chat_id != self.settings.admin_user_id:
+        self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
+        return
+    parts = text.split(maxsplit=1)
+    if len(parts) != 2:
+        self.send(chat_id, "Usage: /getid @username", self.main_reply_keyboard(chat_id))
+        return
+    user = self.db.find_user(parts[1])
+    if not user:
+        self.send(chat_id, "User not found. The user must send /start first.", self.main_reply_keyboard(chat_id))
+        return
+    self.send(
+        chat_id,
+        f"Username: @{user['username'] or '-'}\nTelegram UID: {user['telegram_user_id']}",
+        self.main_reply_keyboard(chat_id),
+    )
+
+def show_balance(self, chat_id: int) -> None:
+    user = self.db.get_user(chat_id)
+    self.send(
+        chat_id,
+        "💰 <b>Balance</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"💳 Available: {self.amount(chat_id, user['balance_cents'])}\n"
+        f"🔒 Reserved withdrawals: {self.amount(chat_id, user['reserved_cents'])}",
+        inline_keyboard(
+            [
+                [
+                    ("🔵 👤 Profile", "profile"),
+                    ("🔵 💰 History", "history"),
+                ],
+                [("🔵 🏠 Main Menu", "menu")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+
+def show_categories(self, chat_id: int) -> None:
+    categories = self.db.connection.execute(
+        """
+        SELECT c.id, c.name,
+          COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
+        FROM categories c
+        LEFT JOIN options o ON o.category_id=c.id AND o.is_deleted=0
+        LEFT JOIN inventory_batches b ON b.option_id=o.id
+        LEFT JOIN inventory_items i ON i.batch_id=b.id
+        WHERE c.is_deleted=0
+        GROUP BY c.id ORDER BY c.name
+        """
+    ).fetchall()
+    if not categories:
+        self.send(chat_id, "📦 Marketplace is currently empty.", self.main_reply_keyboard(chat_id))
+        return
+    rows = [[(f"🔵 {row['name']} — Stock: {row['stock']}", f"category:{row['id']}")] for row in categories]
+    rows.append([("🔵 🏠 Main Menu", "menu")])
+    self.send(chat_id, "🏷️ <b>Categories</b>\n━━━━━━━━━━━━━━━━━━\nChoose a category:", inline_keyboard(rows), parse_mode="HTML")
+
+def show_options(self, chat_id: int, category_id: int) -> None:
+    category = self.db.connection.execute(
+        "SELECT * FROM categories WHERE id=? AND is_deleted=0", (category_id,)
+    ).fetchone()
+    if not category:
+        self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
+        return
+    options = self.db.connection.execute(
+        """
+        SELECT o.id, o.name,
+          COALESCE(SUM(CASE WHEN i.status='available' THEN 1 ELSE 0 END), 0) stock
+        FROM options o
+        LEFT JOIN inventory_batches b ON b.option_id=o.id
+        LEFT JOIN inventory_items i ON i.batch_id=b.id
+        WHERE o.category_id=? AND o.is_deleted=0 GROUP BY o.id ORDER BY o.name
+        """,
+        (category_id,),
+    ).fetchall()
+    if not options:
+        self.send(
+            chat_id,
+            "📦 Stock: 0\nCurrently unavailable.",
+            inline_keyboard(
                 [
                     [("🟢 🏷️ Categories", "market"), ("🔵 🏠 Main Menu", "menu")],
                 ]
@@ -490,7 +490,7 @@ if not options:
         inline_keyboard(rows),
         parse_mode="HTML",
     )
-
+    
 def show_option(self, chat_id: int, option_id: int) -> None:
     option = self.db.option(option_id)
     if not option:
@@ -621,7 +621,8 @@ def show_support(self, chat_id: int) -> None:
         chat_id,
         "Need help? Click below to contact the Support Admin directly.",
         url_keyboard("🟢 💬 Click here to contact Support Admin", "https://t.me/Sojib31_4"),
-)
+    )
+
 def handle_input(self, chat_id: int, text: str, state: str, data: dict[str, Any]) -> None:
     if state == "deposit_amount":
         amount = self.parse_amount(text, chat_id)
@@ -901,7 +902,7 @@ def confirm_from_callback(self, chat_id: int, action: str) -> None:
         self.send(chat_id, FALLBACK, self.main_reply_keyboard(chat_id))
         return
     self.handle_confirm(chat_id, action, json.loads(state["data_json"]))
-
+    
 def handle_confirm(self, chat_id: int, state: str, data: dict[str, Any]) -> None:
     if state == "deposit_confirm":
         try:
@@ -1037,10 +1038,6 @@ def handle_confirm(self, chat_id: int, state: str, data: dict[str, Any]) -> None
 def cancel(self, chat_id: int) -> None:
     self.db.clear_state(chat_id)
     self.send(chat_id, "🔴 Cancelled. No balance, stock, or order was changed.", self.main_reply_keyboard(chat_id))
-    
-# ============================================================
-# NEW FEATURES: Profile, My Orders, Transaction History
-# ============================================================
 
 def show_profile(self, chat_id: int) -> None:
     try:
@@ -1180,10 +1177,6 @@ def show_my_transactions(self, chat_id: int) -> None:
         ),
         parse_mode="HTML",
     )
-
-# ============================================================
-# ADMIN PANEL
-# ============================================================
 
 def show_admin_menu(self, chat_id: int, user_id: int) -> None:
     if not self.is_admin(user_id):
@@ -1385,196 +1378,196 @@ def admin_category(self, chat_id: int, user_id: int, category_id: int) -> None:
         ]
     )
     rows.append([("🟢 ➕ Add Option", f"admin:new_option:{category_id}")])
-    rows.append([("🔵 🔙 Back", "admin:products"), ("🟡 ⚙️ Admin Panel", "admin")])
-    self.send(
-        chat_id,
-        f"🟡 <b>Category: {html.escape(category['name'])}</b>",
-        inline_keyboard(rows),
-        parse_mode="HTML",
-    )
-
-def start_new_option(self, chat_id: int, user_id: int, category_id: int) -> None:
-    if not self.is_admin(user_id):
-        return
-    self.db.set_state(chat_id, "option_name", json.dumps({"category_id": category_id}))
-    self.send(chat_id, "Enter option/sub-category name:", inline_keyboard([[("🔴 Cancel", "cancel")]]))
-
-def start_option_rename(self, chat_id: int, user_id: int, option_id: int) -> None:
-    if not self.is_admin(user_id):
-        return
-    option = self.db.option(option_id)
-    if not option:
-        self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
-        return
-    self.db.set_state(chat_id, "option_rename", json.dumps({"option_id": option_id}))
-    self.send(
-        chat_id,
-        f"Current sub-category name: {option['name']}\nEnter the new name:",
-        inline_keyboard([[("🔴 Cancel", f"admin:option:{option_id}")]]),
-    )
-
-def confirm_option_delete(self, chat_id: int, user_id: int, option_id: int) -> None:
-    if not self.is_admin(user_id):
-        return
-    option = self.db.option(option_id)
-    if not option:
-        self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
-        return
-    self.send(
-        chat_id,
-        f"🔴 Delete sub-category '<b>{html.escape(option['name'])}</b>'?\n"
-        "All available linked stock will be removed.",
-        inline_keyboard(
-            [
-                [("🔴 🗑 Confirm Delete", f"admin:option:delete_confirm:{option_id}")],
-                [("🔵 🔙 Back", f"admin:option:{option_id}")],
-            ]
-        ),
-        parse_mode="HTML",
-    )
-
-def delete_option(self, chat_id: int, user_id: int, option_id: int) -> None:
-    if not self.is_admin(user_id):
-        return
-    try:
-        option = self.db.delete_option(option_id)
-        self.db.clear_state(chat_id)
+            rows.append([("🔵 🔙 Back", "admin:products"), ("🟡 ⚙️ Admin Panel", "admin")])
         self.send(
             chat_id,
-            f"✅ Sub-category '{option['name']}' deleted. Linked available stock was removed.",
+            f"🟡 <b>Category: {html.escape(category['name'])}</b>",
+            inline_keyboard(rows),
+            parse_mode="HTML",
+        )
+
+    def start_new_option(self, chat_id: int, user_id: int, category_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        self.db.set_state(chat_id, "option_name", json.dumps({"category_id": category_id}))
+        self.send(chat_id, "Enter option/sub-category name:", inline_keyboard([[("🔴 Cancel", "cancel")]]))
+
+    def start_option_rename(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        if not option:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
+            return
+        self.db.set_state(chat_id, "option_rename", json.dumps({"option_id": option_id}))
+        self.send(
+            chat_id,
+            f"Current sub-category name: {option['name']}\nEnter the new name:",
+            inline_keyboard([[("🔴 Cancel", f"admin:option:{option_id}")]]),
+        )
+
+    def confirm_option_delete(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        if not option:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
+            return
+        self.send(
+            chat_id,
+            f"🔴 Delete sub-category '<b>{html.escape(option['name'])}</b>'?\n"
+            "All available linked stock will be removed.",
             inline_keyboard(
                 [
-                    [("🔵 📁 Back to Category", f"admin:category:{option['category_id']}")],
-                    [("🟡 ⚙️ Admin Panel", "admin")],
+                    [("🔴 🗑 Confirm Delete", f"admin:option:delete_confirm:{option_id}")],
+                    [("🔵 🔙 Back", f"admin:option:{option_id}")],
                 ]
             ),
+            parse_mode="HTML",
         )
-    except ValueError as error:
-        self.send(chat_id, f"❌ {error}", inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
 
-def admin_option(self, chat_id: int, user_id: int, option_id: int) -> None:
-    if not self.is_admin(user_id):
-        return
-    option = self.db.option(option_id)
-    if not option:
-        self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
-        return
-    variants = self.db.option_price_variants(option_id)
-    rows = [
-        [
-            (
-                f"🟢 🏷️ {self.amount(chat_id, row['price_cents'])} "
-                f"(Stock: {row['available_stock']})",
-                f"admin:variant:{option_id}:{row['price_cents']}",
+    def delete_option(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        try:
+            option = self.db.delete_option(option_id)
+            self.db.clear_state(chat_id)
+            self.send(
+                chat_id,
+                f"✅ Sub-category '{option['name']}' deleted. Linked available stock was removed.",
+                inline_keyboard(
+                    [
+                        [("🔵 📁 Back to Category", f"admin:category:{option['category_id']}")],
+                        [("🟡 ⚙️ Admin Panel", "admin")],
+                    ]
+                ),
             )
-        ]
-        for row in variants
-    ]
-    rows.extend(
-        [
-            [("🟢 ➕ Add Stock", f"admin:add_stock:{option_id}")],
-            [
-                ("🟠 ✏️ Rename", f"admin:option:rename:{option_id}"),
-                ("🔴 🗑 Delete", f"admin:option:delete:{option_id}"),
-            ],
-            [
-                ("🔵 🔙 Back", f"admin:category:{option['category_id']}"),
-                ("🟡 ⚙️ Admin Panel", "admin"),
-            ],
-        ]
-    )
-    self.send(
-        chat_id,
-        f"🟡 <b>{html.escape(str(option['category_name']))} / "
-        f"{html.escape(str(option['name']))}</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Available stock: {option['available_stock']}\nChoose a price variant:",
-        inline_keyboard(rows),
-        parse_mode="HTML",
-    )
+        except ValueError as error:
+            self.send(chat_id, f"❌ {error}", inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
 
-def admin_price_variant(
-    self, chat_id: int, user_id: int, option_id: int, price_cents: int
-) -> None:
-    if not self.is_admin(user_id):
-        return
-    option = self.db.option(option_id)
-    variants = self.db.option_price_variants(option_id)
-    variant = next((row for row in variants if row["price_cents"] == price_cents), None)
-    if not option or not variant:
-        self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
-        return
-    self.send(
-        chat_id,
-        f"🟠 <b>🏷️ Price Variant Management</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"📦 Product: {html.escape(str(option['name']))}\n"
-        f"💰 Price: {self.amount(chat_id, price_cents)}\n"
-        f"📊 Available: {variant['available_stock']}",
-        inline_keyboard(
+    def admin_option(self, chat_id: int, user_id: int, option_id: int) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        if not option:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
+            return
+        variants = self.db.option_price_variants(option_id)
+        rows = [
             [
-                [("🟠 ✏️ Edit Price", f"admin:variant:edit:{option_id}:{price_cents}")],
-                [
-                    ("🟠 🧹 Remove Quantity", f"admin:variant:remove:{option_id}:{price_cents}"),
-                    ("🔴 🗑 Clear Stock", f"admin:variant:clear:{option_id}:{price_cents}"),
-                ],
-                [("🔵 🔙 Back", f"admin:option:{option_id}")],
+                (
+                    f"🟢 🏷️ {self.amount(chat_id, row['price_cents'])} "
+                    f"(Stock: {row['available_stock']})",
+                    f"admin:variant:{option_id}:{row['price_cents']}",
+                )
             ]
-        ),
-        parse_mode="HTML",
-    )
-
-def start_variant_price_edit(
-    self, chat_id: int, user_id: int, option_id: int, price_cents: int
-) -> None:
-    if not self.is_admin(user_id):
-        return
-    self.db.set_state(
-        chat_id,
-        "variant_price",
-        json.dumps({"option_id": option_id, "old_price_cents": price_cents}),
-    )
-    self.send(
-        chat_id,
-        "🟠 Enter the new price per item:",
-        inline_keyboard([[("🔴 Cancel", f"admin:variant:{option_id}:{price_cents}")]]),
-    )
-
-def start_variant_stock_remove(
-    self, chat_id: int, user_id: int, option_id: int, price_cents: int
-) -> None:
-    if not self.is_admin(user_id):
-        return
-    self.db.set_state(
-        chat_id,
-        "variant_remove_quantity",
-        json.dumps({"option_id": option_id, "price_cents": price_cents}),
-    )
-    self.send(
-        chat_id,
-        "🟠 Enter how many available stock items to remove:",
-        inline_keyboard([[("🔴 Cancel", f"admin:variant:{option_id}:{price_cents}")]]),
-    )
-
-def confirm_variant_clear(
-    self, chat_id: int, user_id: int, option_id: int, price_cents: int
-) -> None:
-    if not self.is_admin(user_id):
-        return
-    self.send(
-        chat_id,
-        "🔴 <b>Clear this price stock?</b>\n"
-        "All available items in this price pool will be permanently removed. "
-        "Sold history will remain unchanged.",
-            inline_keyboard(
-        [
-            [("🔴 🗑 Confirm Clear", f"admin:variant:clear_confirm:{option_id}:{price_cents}")],
-            [("🔵 🔙 Back", f"admin:variant:{option_id}:{price_cents}")],
+            for row in variants
         ]
-    ),
-    parse_mode="HTML",
-    )
-    
+        rows.extend(
+            [
+                [("🟢 ➕ Add Stock", f"admin:add_stock:{option_id}")],
+                [
+                    ("🟠 ✏️ Rename", f"admin:option:rename:{option_id}"),
+                    ("🔴 🗑 Delete", f"admin:option:delete:{option_id}"),
+                ],
+                [
+                    ("🔵 🔙 Back", f"admin:category:{option['category_id']}"),
+                    ("🟡 ⚙️ Admin Panel", "admin"),
+                ],
+            ]
+        )
+        self.send(
+            chat_id,
+            f"🟡 <b>{html.escape(str(option['category_name']))} / "
+            f"{html.escape(str(option['name']))}</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Available stock: {option['available_stock']}\nChoose a price variant:",
+            inline_keyboard(rows),
+            parse_mode="HTML",
+        )
+
+    def admin_price_variant(
+        self, chat_id: int, user_id: int, option_id: int, price_cents: int
+    ) -> None:
+        if not self.is_admin(user_id):
+            return
+        option = self.db.option(option_id)
+        variants = self.db.option_price_variants(option_id)
+        variant = next((row for row in variants if row["price_cents"] == price_cents), None)
+        if not option or not variant:
+            self.send(chat_id, FALLBACK, inline_keyboard([[("🟡 ⚙️ Admin Panel", "admin")]]))
+            return
+        self.send(
+            chat_id,
+            f"🟠 <b>🏷️ Price Variant Management</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 Product: {html.escape(str(option['name']))}\n"
+            f"💰 Price: {self.amount(chat_id, price_cents)}\n"
+            f"📊 Available: {variant['available_stock']}",
+            inline_keyboard(
+                [
+                    [("🟠 ✏️ Edit Price", f"admin:variant:edit:{option_id}:{price_cents}")],
+                    [
+                        ("🟠 🧹 Remove Quantity", f"admin:variant:remove:{option_id}:{price_cents}"),
+                        ("🔴 🗑 Clear Stock", f"admin:variant:clear:{option_id}:{price_cents}"),
+                    ],
+                    [("🔵 🔙 Back", f"admin:option:{option_id}")],
+                ]
+            ),
+            parse_mode="HTML",
+        )
+
+    def start_variant_price_edit(
+        self, chat_id: int, user_id: int, option_id: int, price_cents: int
+    ) -> None:
+        if not self.is_admin(user_id):
+            return
+        self.db.set_state(
+            chat_id,
+            "variant_price",
+            json.dumps({"option_id": option_id, "old_price_cents": price_cents}),
+        )
+        self.send(
+            chat_id,
+            "🟠 Enter the new price per item:",
+            inline_keyboard([[("🔴 Cancel", f"admin:variant:{option_id}:{price_cents}")]]),
+        )
+
+    def start_variant_stock_remove(
+        self, chat_id: int, user_id: int, option_id: int, price_cents: int
+    ) -> None:
+        if not self.is_admin(user_id):
+            return
+        self.db.set_state(
+            chat_id,
+            "variant_remove_quantity",
+            json.dumps({"option_id": option_id, "price_cents": price_cents}),
+        )
+        self.send(
+            chat_id,
+            "🟠 Enter how many available stock items to remove:",
+            inline_keyboard([[("🔴 Cancel", f"admin:variant:{option_id}:{price_cents}")]]),
+        )
+
+    def confirm_variant_clear(
+        self, chat_id: int, user_id: int, option_id: int, price_cents: int
+    ) -> None:
+        if not self.is_admin(user_id):
+            return
+        self.send(
+            chat_id,
+            "🔴 <b>Clear this price stock?</b>\n"
+            "All available items in this price pool will be permanently removed. "
+            "Sold history will remain unchanged.",
+            inline_keyboard(
+                [
+                    [("🔴 🗑 Confirm Clear", f"admin:variant:clear_confirm:{option_id}:{price_cents}")],
+                    [("🔵 🔙 Back", f"admin:variant:{option_id}:{price_cents}")],
+                ]
+            ),
+            parse_mode="HTML",
+        )
+
     def clear_variant_stock(
         self, chat_id: int, user_id: int, option_id: int, price_cents: int
     ) -> None:
@@ -1824,3 +1817,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
